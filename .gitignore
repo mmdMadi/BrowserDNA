@@ -1,0 +1,52 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+*.egg
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Environment variables
+.env
+.env.*
+!.env.example
+
+# Database
+data/*.db
+data/*.sqlite
+
+# ML model (large binary, regenerate with training)
+data/*.joblib
+data/*.pkl
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/.env.*.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/
+
+# Pytest / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs
+*.log
