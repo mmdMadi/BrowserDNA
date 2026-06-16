@@ -29,6 +29,10 @@ data/*.sqlite
 # ML model (large binary, regenerate with training)
 data/*.joblib
 data/*.pkl
+data/*.version
+
+# Feature store (runtime data, not source)
+data/feature_store.jsonl
 
 # Node / Next.js
 frontend/node_modules/

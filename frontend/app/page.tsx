@@ -5,10 +5,19 @@ import { analyze, type AnalyzeResult } from "@/lib/api";
 import {
   MouseTracker,
   TypingTracker,
+  ClickTracker,
   canvasFingerprint,
   gpuInfo,
   staticSignals,
+  checkWebRTC,
+  countFonts,
+  checkChromeObj,
+  detectStealth,
+  checkBattery,
+  gpuUAConsistency,
+  timezoneScreenConsistency,
 } from "@/lib/fingerprint";
+import { audioFingerprint } from "@/lib/audio";
 import ScoreBar from "@/components/ScoreBar";
 import VerdictBadge from "@/components/VerdictBadge";
 import Link from "next/link";
@@ -28,17 +37,22 @@ export default function DetectorPage() {
   const startTime = useRef(Date.now());
   const mouseRef = useRef<MouseTracker | null>(null);
   const typingRef = useRef<TypingTracker | null>(null);
+  const clickRef = useRef<ClickTracker | null>(null);
 
   useEffect(() => {
     const mouse = new MouseTracker();
     const typing = new TypingTracker();
+    const click = new ClickTracker();
     mouse.start();
     typing.start();
+    click.start();
     mouseRef.current = mouse;
     typingRef.current = typing;
+    clickRef.current = click;
     return () => {
       mouse.stop();
       typing.stop();
+      click.stop();
     };
   }, []);
 
@@ -51,7 +65,18 @@ export default function DetectorPage() {
       const gpu = gpuInfo();
       const statics = staticSignals();
       const canvasHash = await canvasFingerprint();
+      const audio = await audioFingerprint();
       const timeOnPage = (Date.now() - startTime.current) / 1000;
+      const fontCount = countFonts();
+      const batteryAvail = await checkBattery();
+      const webrtcAvail = checkWebRTC();
+      const audioAvail = audio.hash !== "unavailable";
+
+      const gpuCons = gpuUAConsistency(statics.user_agent, gpu.gpu_vendor, gpu.gpu_renderer);
+      const tzCons = timezoneScreenConsistency(
+        statics.screen_width, statics.screen_height,
+        statics.plugins_count, audioAvail,
+      );
 
       const payload = {
         name,
@@ -61,10 +86,21 @@ export default function DetectorPage() {
         gpu_vendor: gpu.gpu_vendor,
         gpu_renderer: gpu.gpu_renderer,
         canvas_hash: canvasHash,
+        audio_hash: audio.hash,
+        audio_available: audioAvail,
+        webrtc_available: webrtcAvail,
+        font_count: fontCount,
+        chrome_obj_missing: checkChromeObj(),
+        stealth_detected: detectStealth(),
+        battery_available: batteryAvail,
+        gpu_consistency: gpuCons,
+        timezone_consistency: tzCons,
         mouse_entropy: mouseRef.current?.entropy() ?? 0,
         typing_delay: typingRef.current?.avgDelay() ?? 0,
         scroll_events: mouseRef.current?.scrollEvents() ?? 0,
         time_on_page: timeOnPage,
+        click_variance: clickRef.current?.variance() ?? 0,
+        click_count: clickRef.current?.count() ?? 0,
       };
 
       const data = await analyze(payload);
@@ -205,10 +241,15 @@ export default function DetectorPage() {
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
                 Signal Breakdown
               </h3>
-              <ScoreBar label="Browser Fingerprint" value={result.browser_score} />
-              <ScoreBar label="Behaviour" value={result.behavior_score} />
-              <ScoreBar label="Network" value={result.network_score} />
-              <ScoreBar label="ML Model" value={result.ml_probability} />
+              <ScoreBar label={`Browser Fingerprint (${Math.round((result.weights?.browser ?? 0.35) * 100)}%)`} value={result.browser_score} />
+              <ScoreBar label={`Behaviour (${Math.round((result.weights?.behavior ?? 0.25) * 100)}%)`} value={result.behavior_score} />
+              <ScoreBar label={`Network (${Math.round((result.weights?.network ?? 0.15) * 100)}%)`} value={result.network_score} />
+              <ScoreBar label={`ML Model (${Math.round((result.weights?.ml ?? 0.25) * 100)}%)`} value={result.ml_probability} />
+              {result.weights?.network === 0.10 && (
+                <p className="text-xs text-amber-400/80 mt-1">
+                  ⚡ Dynamic weights active — datacenter IP detected, behavior weight increased
+                </p>
+              )}
             </div>
 
             {/* Links */}

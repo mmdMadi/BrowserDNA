@@ -1,7 +1,21 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { canvasFingerprint, gpuInfo, staticSignals } from "@/lib/fingerprint";
+import {
+  canvasFingerprint,
+  gpuInfo,
+  staticSignals,
+  checkWebRTC,
+  countFonts,
+  checkChromeObj,
+  detectStealth,
+  checkBattery,
+  gpuUAConsistency,
+  timezoneScreenConsistency,
+  webgl2Fingerprint,
+  getClientHints,
+  webrtcLocalIP,
+} from "@/lib/fingerprint";
 import { audioFingerprint } from "@/lib/audio";
 import ModuleCard from "@/components/ModuleCard";
 import LiveRow from "@/components/LiveRow";
@@ -25,8 +39,20 @@ interface FingerprintData {
   gpu_vendor: string;
   gpu_renderer: string;
   canvas_hash: string;
+  webgl2_hash: string;
   audio_hash: string;
   audio_value: number;
+  webrtc_available: boolean;
+  webrtc_local_ip: string;
+  font_count: number;
+  chrome_obj_missing: boolean;
+  stealth_detected: boolean;
+  battery_available: boolean;
+  gpu_consistency: number;
+  timezone_consistency: number;
+  client_hints_brands: string;
+  client_hints_mobile: boolean | null;
+  client_hints_platform: string;
   connection_type: string;
   pdf_viewer: string;
 }
@@ -53,7 +79,22 @@ export default function FingerprintModule() {
       const statics = staticSignals();
       const gpu = gpuInfo();
       const canvas = await canvasFingerprint();
+      const webgl2 = await webgl2Fingerprint();
       const audio = await audioFingerprint();
+      const webrtcAvail = checkWebRTC();
+      const webrtcIP = await webrtcLocalIP();
+      const fontCount = countFonts();
+      const chromeObjMissing = checkChromeObj();
+      const stealthDetected = detectStealth();
+      const batteryAvail = await checkBattery();
+      const hints = getClientHints();
+      const audioAvail = audio.hash !== "unavailable";
+
+      const gpuCons = gpuUAConsistency(statics.user_agent, gpu.gpu_vendor, gpu.gpu_renderer);
+      const tzCons = timezoneScreenConsistency(
+        statics.screen_width, statics.screen_height,
+        statics.plugins_count, audioAvail,
+      );
 
       const conn = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection;
       const connectionType = conn?.effectiveType ?? "unknown";
@@ -83,8 +124,20 @@ export default function FingerprintModule() {
         gpu_vendor: gpu.gpu_vendor || "unavailable",
         gpu_renderer: gpu.gpu_renderer || "unavailable",
         canvas_hash: canvas || "failed",
+        webgl2_hash: webgl2,
         audio_hash: audio.hash,
         audio_value: audio.value,
+        webrtc_available: webrtcAvail,
+        webrtc_local_ip: webrtcIP,
+        font_count: fontCount,
+        chrome_obj_missing: chromeObjMissing,
+        stealth_detected: stealthDetected,
+        battery_available: batteryAvail,
+        gpu_consistency: gpuCons,
+        timezone_consistency: tzCons,
+        client_hints_brands: hints.brands,
+        client_hints_mobile: hints.mobile,
+        client_hints_platform: hints.platform,
         connection_type: connectionType,
         pdf_viewer: pdfViewer,
       });
@@ -125,6 +178,10 @@ export default function FingerprintModule() {
           { label: "Plugins", value: `${data.plugins_count ?? "?"}`, bad: data.plugins_count === 0 },
           { label: "Canvas Hash", value: data.canvas_hash?.slice(0, 8) + "…", bad: data.canvas_hash === "failed" },
           { label: "Audio Hash", value: data.audio_hash ?? "…", bad: data.audio_hash === "unavailable" },
+          { label: "Stealth", value: data.stealth_detected ? "⚠️ Detected" : "✓ Clean", bad: data.stealth_detected },
+          { label: "GPU OK", value: data.gpu_consistency === 0 ? "⚠️ Mismatch" : "✓ Match", bad: data.gpu_consistency === 0 },
+          { label: "TZ/Screen", value: data.timezone_consistency === 0 ? "⚠️ Suspicious" : "✓ Normal", bad: data.timezone_consistency === 0 },
+          { label: "Battery API", value: data.battery_available === false ? "⚠️ Absent" : "✓ Present", bad: data.battery_available === false },
         ].map((item) => (
           <div
             key={item.label}
@@ -263,6 +320,130 @@ export default function FingerprintModule() {
           </div>
         </ModuleCard>
 
+        {/* Advanced Bot-Detection Signals */}
+        <ModuleCard title="Advanced Bot-Detection Signals" description="Signals that defeat even stealth bots — harder to fake">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">WebRTC Availability</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="WebRTC Available"
+            value={data.webrtc_available === undefined ? "checking…" : data.webrtc_available ? "Yes ✓" : "No ⚠️"}
+            flag={data.webrtc_available === false ? "warn" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">+8 pts when absent. Headless/sandboxed environments strip WebRTC.</div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Font Count</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="System Fonts Detected"
+            value={data.font_count !== undefined ? `${data.font_count} fonts` : "counting…"}
+            flag={data.font_count === 0 ? "bad" : (data.font_count ?? 999) < 5 ? "warn" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">+7 pts when 0, +4 pts when &lt;5. Headless containers have no system fonts.</div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">window.chrome Object</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="chrome obj present"
+            value={data.chrome_obj_missing === undefined ? "checking…" : data.chrome_obj_missing ? "Missing ⚠️" : "Present ✓"}
+            flag={data.chrome_obj_missing ? "bad" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">+6 pts when missing. Authentic Chrome always exposes window.chrome.</div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Stealth CDP Detection</span>
+            <ImpactBadge level="high" />
+          </div>
+          <LiveRow
+            label="Stealth artifacts found"
+            value={data.stealth_detected === undefined ? "checking…" : data.stealth_detected ? "Detected ⚠️" : "Clean ✓"}
+            flag={data.stealth_detected ? "bad" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">+12 pts when detected. Finds CDP variable artifacts and Playwright globals even after stealth patching.</div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Battery API</span>
+            <ImpactBadge level="low" />
+          </div>
+          <LiveRow
+            label="Battery Status API"
+            value={data.battery_available === undefined ? "checking…" : data.battery_available ? "Available ✓" : "Unavailable ⚠️"}
+            flag={data.battery_available === false ? "warn" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">+4 pts when unavailable. Headless Chromium disables the Battery Status API by default.</div>
+        </ModuleCard>
+
+        {/* Consistency & Client Hints */}
+        <ModuleCard title="Consistency & Client Hints" description="Cross-signal consistency checks + navigator.userAgentData (Chrome 90+)">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">GPU / UA Consistency</span>
+            <ImpactBadge level="high" />
+          </div>
+          <LiveRow
+            label="GPU matches UA"
+            value={data.gpu_consistency === 0 ? "Mismatch ⚠️ (SwiftShader / no GPU)" : "Consistent ✓"}
+            flag={data.gpu_consistency === 0 ? "bad" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            +8 pts on mismatch. SwiftShader renderer on a desktop UA = headless Chromium.
+          </div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Timezone / Screen Consistency</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="Screen resolution normal"
+            value={data.timezone_consistency === 0 ? "Suspicious (800×600 or 1280×720 default) ⚠️" : "Normal ✓"}
+            flag={data.timezone_consistency === 0 ? "bad" : "good"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            +6 pts. Classic headless Chromium default resolutions combined with 0 plugins.
+          </div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">WebRTC Local IP</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="Local IP (via ICE)"
+            value={data.webrtc_local_ip || "not extracted"}
+            flag={data.webrtc_local_ip ? "neutral" : "warn"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            Real browsers leak a local RFC-1918 IP via ICE candidates. Headless sandboxes often return nothing.
+          </div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">WebGL2 Fingerprint</span>
+            <ImpactBadge level="low" />
+          </div>
+          <LiveRow
+            label="WebGL2 param hash"
+            value={<span className="font-mono">{data.webgl2_hash || "no-webgl2"}</span>}
+            flag={data.webgl2_hash === "no-webgl2" ? "warn" : "neutral"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            Hashes key WebGL2 parameters (MAX_TEXTURE_SIZE, MAX_VERTEX_ATTRIBS…). More discriminating than WebGL1.
+          </div>
+
+          <div className="mt-3 flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Client Hints (navigator.userAgentData)</span>
+            <ImpactBadge level="low" />
+          </div>
+          <LiveRow label="CH Brands" value={data.client_hints_brands || "not available"} flag="neutral" />
+          <LiveRow label="CH Mobile" value={data.client_hints_mobile !== null ? String(data.client_hints_mobile) : "not available"} flag="neutral" />
+          <LiveRow label="CH Platform" value={data.client_hints_platform || "not available"} flag="neutral" />
+          <div className="mt-2 text-xs text-slate-500 pl-1">
+            navigator.userAgentData (Chrome 90+) provides structured brand/platform info. Bots often lack or mispopulate it.
+          </div>
+        </ModuleCard>
+
       </div>
 
       {/* Educational summary */}
@@ -285,7 +466,7 @@ export default function FingerprintModule() {
                 <td className="py-2 pr-4">navigator.webdriver</td>
                 <td className={`py-2 pr-4 font-mono ${data.webdriver ? "text-red-400" : "text-emerald-400"}`}>{String(data.webdriver)}</td>
                 <td className="py-2 pr-4 text-slate-500">true</td>
-                <td className="py-2 text-right font-bold text-slate-200">45</td>
+                <td className="py-2 text-right font-bold text-slate-200">65</td>
               </tr>
               <tr>
                 <td className="py-2 pr-4">Headless UA keyword</td>
@@ -299,7 +480,37 @@ export default function FingerprintModule() {
                 <td className="py-2 pr-4">Plugin count</td>
                 <td className={`py-2 pr-4 font-mono ${data.plugins_count === 0 ? "text-red-400" : "text-emerald-400"}`}>{data.plugins_count}</td>
                 <td className="py-2 pr-4 text-slate-500">0</td>
-                <td className="py-2 text-right font-bold text-slate-200">10</td>
+                <td className="py-2 text-right font-bold text-slate-200">15</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">Stealth CDP artifacts</td>
+                <td className={`py-2 pr-4 font-mono ${data.stealth_detected ? "text-red-400" : "text-emerald-400"}`}>{data.stealth_detected ? "detected" : "clean"}</td>
+                <td className="py-2 pr-4 text-slate-500">CDP vars / Playwright globals</td>
+                <td className="py-2 text-right font-bold text-slate-200">12</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">Audio fingerprint</td>
+                <td className={`py-2 pr-4 font-mono ${data.audio_hash === "unavailable" ? "text-red-400" : "text-emerald-400"}`}>{data.audio_hash === "unavailable" ? "blocked" : "present"}</td>
+                <td className="py-2 pr-4 text-slate-500">unavailable</td>
+                <td className="py-2 text-right font-bold text-slate-200">8</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">WebRTC available</td>
+                <td className={`py-2 pr-4 font-mono ${data.webrtc_available === false ? "text-red-400" : "text-emerald-400"}`}>{data.webrtc_available === false ? "absent" : "present"}</td>
+                <td className="py-2 pr-4 text-slate-500">absent</td>
+                <td className="py-2 text-right font-bold text-slate-200">8</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">Font count</td>
+                <td className={`py-2 pr-4 font-mono ${(data.font_count ?? 999) === 0 ? "text-red-400" : (data.font_count ?? 999) < 5 ? "text-amber-400" : "text-emerald-400"}`}>{data.font_count ?? "?"}</td>
+                <td className="py-2 pr-4 text-slate-500">0 fonts</td>
+                <td className="py-2 text-right font-bold text-slate-200">7</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">window.chrome missing</td>
+                <td className={`py-2 pr-4 font-mono ${data.chrome_obj_missing ? "text-red-400" : "text-emerald-400"}`}>{data.chrome_obj_missing ? "missing" : "present"}</td>
+                <td className="py-2 pr-4 text-slate-500">missing</td>
+                <td className="py-2 text-right font-bold text-slate-200">6</td>
               </tr>
               <tr>
                 <td className="py-2 pr-4">GPU vendor</td>
@@ -312,6 +523,12 @@ export default function FingerprintModule() {
                 <td className={`py-2 pr-4 font-mono ${data.canvas_hash === "failed" ? "text-red-400" : "text-emerald-400"}`}>{data.canvas_hash === "failed" ? "failed" : "present"}</td>
                 <td className="py-2 pr-4 text-slate-500">empty/failed</td>
                 <td className="py-2 text-right font-bold text-slate-200">5</td>
+              </tr>
+              <tr>
+                <td className="py-2 pr-4">Battery API</td>
+                <td className={`py-2 pr-4 font-mono ${data.battery_available === false ? "text-red-400" : "text-emerald-400"}`}>{data.battery_available === false ? "absent" : "present"}</td>
+                <td className="py-2 pr-4 text-slate-500">absent</td>
+                <td className="py-2 text-right font-bold text-slate-200">4</td>
               </tr>
             </tbody>
           </table>

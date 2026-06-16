@@ -41,11 +41,25 @@ class AnalyzeRequest(BaseModel):
     canvas_hash: Optional[str] = Field(None, max_length=64)
     plugins_count: Optional[int] = Field(None, ge=0)
 
+    # New: advanced fingerprint signals
+    audio_hash: Optional[str] = Field(None, max_length=64)
+    audio_available: Optional[bool] = None
+    webrtc_available: Optional[bool] = None
+    font_count: Optional[int] = Field(None, ge=0)
+    chrome_obj_missing: Optional[bool] = None
+    stealth_detected: Optional[bool] = None
+    battery_available: Optional[bool] = None
+    # Consistency signals (v4) — computed client-side and/or server-side
+    gpu_consistency: Optional[int] = Field(None, ge=0, le=1)
+    timezone_consistency: Optional[int] = Field(None, ge=0, le=1)
+
     # Behavioural
     mouse_entropy: Optional[float] = Field(None, ge=0)
     typing_delay: Optional[float] = Field(None, ge=0)
     scroll_events: Optional[int] = Field(None, ge=0)
     time_on_page: Optional[float] = Field(None, ge=0)
+    click_variance: Optional[float] = Field(None, ge=0)
+    click_count: Optional[int] = Field(None, ge=0)
 
     @field_validator("name", "reason", mode="before")
     @classmethod
@@ -65,6 +79,12 @@ class AnalyzeResponse(BaseModel):
     behavior_score: float
     network_score: float
     ml_probability: float
+    # Dynamic weights used for this request (for explainability UI)
+    weights: dict[str, float]
+    # v5 additions — network & weight explainability
+    weight_profile: Optional[str] = None      # e.g. "automation", "datacenter", "base"
+    network_tier: Optional[str] = None        # tor / vpn / proxy / datacenter / residential
+    network_reasons: list[str] = []           # why this network score was assigned
 
 
 # ---------------------------------------------------------------------------
@@ -100,10 +120,23 @@ class VisitOut(BaseModel):
     canvas_hash: Optional[str]
     plugins_count: Optional[int]
 
+    # New fingerprint signals
+    audio_hash: Optional[str]
+    audio_available: Optional[bool]
+    webrtc_available: Optional[bool]
+    font_count: Optional[int]
+    chrome_obj_missing: Optional[bool]
+    stealth_detected: Optional[bool]
+    battery_available: Optional[bool]
+    gpu_consistency: Optional[int]
+    timezone_consistency: Optional[int]
+
     mouse_entropy: Optional[float]
     typing_delay: Optional[float]
     scroll_events: Optional[int]
     time_on_page: Optional[float]
+    click_variance: Optional[float]
+    click_count: Optional[int]
 
     browser_score: Optional[float]
     behavior_score: Optional[float]

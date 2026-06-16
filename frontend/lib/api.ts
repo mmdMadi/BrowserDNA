@@ -23,10 +23,22 @@ export interface AnalyzePayload {
   webdriver?: boolean;
   canvas_hash?: string;
   plugins_count?: number;
+  // New signals
+  audio_hash?: string;
+  audio_available?: boolean;
+  webrtc_available?: boolean;
+  font_count?: number;
+  chrome_obj_missing?: boolean;
+  stealth_detected?: boolean;
+  battery_available?: boolean;
+  gpu_consistency?: number;
+  timezone_consistency?: number;
   mouse_entropy?: number;
   typing_delay?: number;
   scroll_events?: number;
   time_on_page?: number;
+  click_variance?: number;
+  click_count?: number;
 }
 
 export interface AnalyzeResult {
@@ -37,6 +49,10 @@ export interface AnalyzeResult {
   behavior_score: number;
   network_score: number;
   ml_probability: number;
+  weights: { browser: number; network: number; behavior: number; ml: number };
+  weight_profile?: string;    // e.g. "automation", "datacenter", "base"
+  network_tier?: string;      // tor / vpn / proxy / datacenter / residential
+  network_reasons?: string[]; // why this network score was given
 }
 
 export interface Visit {
@@ -64,6 +80,15 @@ export interface Visit {
   webdriver: boolean | null;
   canvas_hash: string | null;
   plugins_count: number | null;
+  audio_hash: string | null;
+  audio_available: boolean | null;
+  webrtc_available: boolean | null;
+  font_count: number | null;
+  chrome_obj_missing: boolean | null;
+  stealth_detected: boolean | null;
+  battery_available: boolean | null;
+  gpu_consistency: number | null;
+  timezone_consistency: number | null;
   mouse_entropy: number | null;
   typing_delay: number | null;
   scroll_events: number | null;

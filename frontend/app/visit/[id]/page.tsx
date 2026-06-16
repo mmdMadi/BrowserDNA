@@ -127,6 +127,41 @@ export default function VisitDetailPage({ params }: { params: Promise<{ id: stri
           } />
           <InfoRow label="GPU vendor" value={visit.gpu_vendor || <span className="text-amber-400">missing ⚠️</span>} />
           <InfoRow label="GPU renderer" value={visit.gpu_renderer || <span className="text-amber-400">missing ⚠️</span>} />
+          <InfoRow label="Audio available" value={<Bool value={visit.audio_available ?? null} />} />
+          <InfoRow label="Audio hash" value={
+            visit.audio_hash
+              ? <span className="font-mono text-xs">{visit.audio_hash}</span>
+              : <span className="text-amber-400">unavailable ⚠️</span>
+          } />
+          <InfoRow label="WebRTC available" value={<Bool value={visit.webrtc_available ?? null} />} />
+          <InfoRow label="Font count" value={
+            visit.font_count === 0
+              ? <span className="text-amber-400 font-semibold">0 ⚠️</span>
+              : visit.font_count !== null
+              ? <span className={(visit.font_count ?? 0) < 5 ? "text-amber-400" : "text-emerald-400"}>{visit.font_count}</span>
+              : null
+          } />
+          <InfoRow label="chrome obj missing" value={
+            visit.chrome_obj_missing
+              ? <span className="text-red-400 font-semibold">Yes ⚠️</span>
+              : <span className="text-emerald-400">No ✓</span>
+          } />
+          <InfoRow label="Stealth detected" value={
+            visit.stealth_detected
+              ? <span className="text-red-400 font-semibold">Yes ⚠️</span>
+              : <span className="text-emerald-400">No ✓</span>
+          } />
+          <InfoRow label="Battery API" value={<Bool value={visit.battery_available ?? null} />} />
+          <InfoRow label="GPU consistency" value={
+            visit.gpu_consistency === 0
+              ? <span className="text-red-400 font-semibold">Mismatch ⚠️</span>
+              : <span className="text-emerald-400">OK ✓</span>
+          } />
+          <InfoRow label="Screen/TZ consistency" value={
+            visit.timezone_consistency === 0
+              ? <span className="text-red-400 font-semibold">Suspicious ⚠️</span>
+              : <span className="text-emerald-400">Normal ✓</span>
+          } />
         </Section>
 
         {/* Browser / Navigator */}

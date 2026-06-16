@@ -1,5 +1,5 @@
 """
-Bot Detection API — FastAPI backend
+Bot Detection API — FastAPI backend  v5
 """
 
 from __future__ import annotations
@@ -16,35 +16,40 @@ from sqlalchemy.orm import Session
 
 from . import models
 from .database import engine, get_db
-from .ml_model import predict
-from .network_analysis import network_score
+from .feature_store import append_sample, sample_counts, ready_to_retrain
+from .ml_model import predict, retrain_from_store, FEATURE_NAMES
+from .network_analysis import analyze_network, network_detail
 from .schemas import AnalyzeRequest, AnalyzeResponse, PaginatedVisits, VisitOut
-from .scoring import behavior_score, browser_score, final_probability, verdict
+from .scoring import (
+    behavior_score,
+    behavior_score_detailed,
+    browser_score,
+    browser_score_detailed,
+    dynamic_weights,
+    final_probability,
+    gpu_ua_consistency,
+    select_weight_profile,
+    timezone_screen_consistency,
+    verdict,
+)
 
-# ---------------------------------------------------------------------------
-# Logging
-# ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# DB bootstrap
-# ---------------------------------------------------------------------------
 models.Base.metadata.create_all(bind=engine)
 
 # ---------------------------------------------------------------------------
-# Simple in-memory rate limiter for the demo endpoint
+# In-memory rate limiter (demo endpoint)
 # ---------------------------------------------------------------------------
 _rate_store: dict[str, list[float]] = defaultdict(list)
-RATE_LIMIT = 5        # max requests
-RATE_WINDOW = 10.0    # per N seconds
+RATE_LIMIT = 5
+RATE_WINDOW = 10.0
 
 
 def check_rate_limit(ip: str) -> tuple[bool, int, int]:
-    """Returns (allowed, remaining, retry_after_seconds)."""
     now = time.time()
     window_start = now - RATE_WINDOW
     hits = _rate_store[ip] = [t for t in _rate_store[ip] if t > window_start]
@@ -54,16 +59,20 @@ def check_rate_limit(ip: str) -> tuple[bool, int, int]:
     hits.append(now)
     return True, RATE_LIMIT - len(hits), 0
 
+
 # ---------------------------------------------------------------------------
 # App
 # ---------------------------------------------------------------------------
 app = FastAPI(
     title="Bot Detection Lab",
-    version="2.0.0",
-    description="Multi-signal bot detection API with browser fingerprinting, behavioral analysis, and ML.",
+    version="5.0.0",
+    description=(
+        "Multi-signal bot detection: browser fingerprinting, behavioural analysis, "
+        "multi-layer network scoring, rule engine, Bayesian weights, ML ensemble, "
+        "and a real-data feature store for periodic retraining."
+    ),
 )
 
-# CORS — allow Next.js dev server and production origin
 ALLOWED_ORIGINS = os.getenv(
     "ALLOWED_ORIGINS",
     "http://localhost:3000,http://127.0.0.1:3000",
@@ -78,9 +87,6 @@ app.add_middleware(
 )
 
 
-# ---------------------------------------------------------------------------
-# Helper: resolve real client IP (proxy-aware)
-# ---------------------------------------------------------------------------
 def get_client_ip(request: Request) -> str:
     forwarded_for = request.headers.get("X-Forwarded-For")
     if forwarded_for:
@@ -90,13 +96,33 @@ def get_client_ip(request: Request) -> str:
     return "unknown"
 
 
+def _build_feature_vector(body: AnalyzeRequest, gpu_cons: int, tz_cons: int) -> list[float]:
+    return [
+        float(body.mouse_entropy or 0),
+        float(body.typing_delay or 0),
+        float(body.webdriver or False),
+        float(body.plugins_count or 0),
+        float(body.scroll_events or 0),
+        float(body.time_on_page or 0),
+        float(body.font_count or 0),
+        float(body.audio_available or False),
+        float(body.webrtc_available or False),
+        float(body.click_variance or 0),
+        float(body.hardware_concurrency or 0),
+        float(body.stealth_detected or False),
+        float(body.battery_available or False),
+        float(gpu_cons),
+        float(tz_cons),
+    ]
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
 
 @app.get("/health", tags=["Meta"])
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "version": "5.0.0"}
 
 
 @app.post("/analyze", response_model=AnalyzeResponse, tags=["Detection"])
@@ -108,16 +134,31 @@ async def analyze(
     ip = get_client_ip(request)
     logger.info("Analyze request from %s", ip)
 
-    # --- Network ---
-    net_score, asn = network_score(ip)
+    data = body.model_dump()
 
-    # --- Browser ---
-    b_score = browser_score(body.model_dump())
+    # ── Consistency checks ────────────────────────────────────────────────
+    gpu_cons = gpu_ua_consistency(data)
+    tz_cons = timezone_screen_consistency(data)
+    if body.gpu_consistency is not None:
+        gpu_cons = int(body.gpu_consistency)
+    if body.timezone_consistency is not None:
+        tz_cons = int(body.timezone_consistency)
+    data["gpu_consistency"] = gpu_cons
+    data["timezone_consistency"] = tz_cons
 
-    # --- Behavior ---
-    beh_score = behavior_score(body.model_dump())
+    # ── Multi-layer network analysis ──────────────────────────────────────
+    net_result = analyze_network(ip, dict(request.headers))
+    net_score = net_result.score
+    net_tier = net_result.tier
+    asn = net_result.asn
 
-    # --- ML ---
+    # ── Browser score (rule engine) ───────────────────────────────────────
+    b_score, b_rules = browser_score_detailed(data)
+
+    # ── Behavior score (rule engine) ──────────────────────────────────────
+    beh_score, beh_rules = behavior_score_detailed(data)
+
+    # ── ML ────────────────────────────────────────────────────────────────
     try:
         ml = predict(
             mouse_entropy=float(body.mouse_entropy or 0),
@@ -126,54 +167,70 @@ async def analyze(
             plugins_count=int(body.plugins_count or 0),
             scroll_events=int(body.scroll_events or 0),
             time_on_page=float(body.time_on_page or 0),
+            font_count=int(body.font_count or 0),
+            audio_available=bool(body.audio_available),
+            webrtc_available=bool(body.webrtc_available),
+            click_variance=float(body.click_variance or 0),
+            hardware_concurrency=int(body.hardware_concurrency or 0),
+            stealth_detected=bool(body.stealth_detected),
+            battery_available=bool(body.battery_available),
+            gpu_consistency=gpu_cons,
+            timezone_consistency=tz_cons,
         )
     except Exception as exc:
         logger.warning("ML prediction failed: %s", exc)
         ml = 0.0
 
-    prob = final_probability(b_score, net_score, beh_score, ml)
+    # ── Bayesian final probability ─────────────────────────────────────────
+    prob = final_probability(
+        b_score, net_score, beh_score, ml,
+        network_tier=net_tier,
+        webdriver=bool(body.webdriver),
+        stealth=bool(body.stealth_detected),
+    )
     v = verdict(prob)
 
-    # --- Persist ---
+    # ── Select weight profile for response ────────────────────────────────
+    profile_name, used_weights = select_weight_profile(
+        net_tier, b_score, beh_score,
+        bool(body.webdriver), bool(body.stealth_detected),
+    )
+
+    # ── Persist ───────────────────────────────────────────────────────────
     visit = models.Visit(
-        ip=ip,
-        asn=asn,
-        name=body.name,
-        email=body.email,
-        reason=body.reason,
-        user_agent=body.user_agent,
-        platform=body.platform,
-        language=body.language,
-        timezone=body.timezone,
-        screen_width=body.screen_width,
-        screen_height=body.screen_height,
+        ip=ip, asn=asn,
+        name=body.name, email=body.email, reason=body.reason,
+        user_agent=body.user_agent, platform=body.platform,
+        language=body.language, timezone=body.timezone,
+        screen_width=body.screen_width, screen_height=body.screen_height,
         color_depth=body.color_depth,
         hardware_concurrency=body.hardware_concurrency,
-        device_memory=body.device_memory,
-        touch_support=body.touch_support,
-        cookie_enabled=body.cookie_enabled,
-        do_not_track=body.do_not_track,
-        gpu_vendor=body.gpu_vendor,
-        gpu_renderer=body.gpu_renderer,
-        webdriver=body.webdriver,
-        canvas_hash=body.canvas_hash,
+        device_memory=body.device_memory, touch_support=body.touch_support,
+        cookie_enabled=body.cookie_enabled, do_not_track=body.do_not_track,
+        gpu_vendor=body.gpu_vendor, gpu_renderer=body.gpu_renderer,
+        webdriver=body.webdriver, canvas_hash=body.canvas_hash,
         plugins_count=body.plugins_count,
-        mouse_entropy=body.mouse_entropy,
-        typing_delay=body.typing_delay,
-        scroll_events=body.scroll_events,
-        time_on_page=body.time_on_page,
-        browser_score=b_score,
-        behavior_score=beh_score,
+        audio_hash=body.audio_hash, audio_available=body.audio_available,
+        webrtc_available=body.webrtc_available, font_count=body.font_count,
+        chrome_obj_missing=body.chrome_obj_missing,
+        stealth_detected=body.stealth_detected,
+        battery_available=body.battery_available,
+        gpu_consistency=gpu_cons, timezone_consistency=tz_cons,
+        mouse_entropy=body.mouse_entropy, typing_delay=body.typing_delay,
+        scroll_events=body.scroll_events, time_on_page=body.time_on_page,
+        click_variance=body.click_variance, click_count=body.click_count,
+        browser_score=b_score, behavior_score=beh_score,
         network_score=net_score,
         ml_probability=round(ml * 100, 2),
-        bot_probability=prob,
-        verdict=v,
+        bot_probability=prob, verdict=v,
     )
     db.add(visit)
     db.commit()
     db.refresh(visit)
 
-    logger.info("Visit %d: verdict=%s prob=%.1f%%", visit.id, v, prob)
+    append_sample(_build_feature_vector(body, gpu_cons, tz_cons), v, source="real")
+    logger.info("Visit %d: verdict=%s prob=%.1f%% tier=%s profile=%s",
+                visit.id, v, prob, net_tier, profile_name)
 
     return AnalyzeResponse(
         visit_id=visit.id,
@@ -183,6 +240,10 @@ async def analyze(
         behavior_score=beh_score,
         network_score=net_score,
         ml_probability=round(ml * 100, 2),
+        weights=used_weights,
+        weight_profile=profile_name,
+        network_tier=net_tier,
+        network_reasons=net_result.reasons,
     )
 
 
@@ -196,7 +257,6 @@ def list_visits(
     query = db.query(models.Visit)
     if verdict_filter:
         query = query.filter(models.Visit.verdict == verdict_filter.upper())
-
     total = query.count()
     items = (
         query.order_by(models.Visit.id.desc())
@@ -204,11 +264,8 @@ def list_visits(
         .limit(page_size)
         .all()
     )
-
     return PaginatedVisits(
-        total=total,
-        page=page,
-        page_size=page_size,
+        total=total, page=page, page_size=page_size,
         items=[VisitOut.model_validate(i) for i in items],
     )
 
@@ -222,54 +279,74 @@ def get_visit(visit_id: int, db: Session = Depends(get_db)):
 
 
 # ---------------------------------------------------------------------------
-# Lab demo endpoints
+# Network inspection endpoint
+# ---------------------------------------------------------------------------
+
+@app.get("/network/{ip}", tags=["Detection"])
+async def inspect_network(ip: str, request: Request):
+    """Inspect network classification for a given IP address."""
+    return network_detail(ip, dict(request.headers))
+
+
+# ---------------------------------------------------------------------------
+# Admin
+# ---------------------------------------------------------------------------
+
+@app.post("/admin/retrain", tags=["Admin"])
+async def admin_retrain():
+    counts = sample_counts()
+    if not ready_to_retrain():
+        return {
+            "status": "insufficient_data",
+            "store_counts": counts,
+            "required_per_class": 50,
+            "message": (
+                f"Need ≥50 samples per class. "
+                f"Current: {counts['human']} human, {counts['bot']} bot."
+            ),
+        }
+    result = retrain_from_store()
+    result["store_counts"] = counts
+    return result
+
+
+@app.get("/admin/store-stats", tags=["Admin"])
+async def store_stats():
+    counts = sample_counts()
+    return {
+        "store_counts": counts,
+        "ready_to_retrain": ready_to_retrain(),
+        "feature_names": FEATURE_NAMES,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Lab demo
 # ---------------------------------------------------------------------------
 
 @app.get("/demo/rate-limit", tags=["Lab"])
 async def demo_rate_limit(request: Request):
-    """
-    Rate-limit demo — allows 5 requests per 10 seconds per IP.
-    Used by the Attack Simulation module to demonstrate rate limiting live.
-    """
     ip = get_client_ip(request)
     allowed, remaining, retry_after = check_rate_limit(ip)
-
     if not allowed:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Rate limit exceeded. Retry after {retry_after}s.",
             headers={"Retry-After": str(retry_after)},
         )
-
-    return {
-        "status": "ok",
-        "message": "Request allowed",
-        "remaining": remaining,
-        "limit": RATE_LIMIT,
-        "window_seconds": RATE_WINDOW,
-    }
+    return {"status": "ok", "message": "Request allowed",
+            "remaining": remaining, "limit": RATE_LIMIT, "window_seconds": RATE_WINDOW}
 
 
 @app.post("/demo/honeypot", tags=["Lab"])
 async def demo_honeypot(request: Request):
-    """
-    Honeypot field demo — if the hidden field is filled, it's a bot.
-    """
     body = await request.json()
-    honeypot_value = body.get("_hp", "")
-    if honeypot_value:
-        return {
-            "caught": True,
-            "reason": "Honeypot field was filled",
-            "value": honeypot_value[:50],
-        }
+    hp = body.get("_hp", "")
+    if hp:
+        return {"caught": True, "reason": "Honeypot field was filled", "value": hp[:50]}
     return {"caught": False, "reason": "Honeypot field is empty — looks human"}
 
 
 @app.get("/demo/echo", tags=["Lab"])
 async def demo_echo(request: Request):
-    """Returns request headers — useful for inspecting what the browser sends."""
-    return {
-        "ip": get_client_ip(request),
-        "headers": dict(request.headers),
-    }
+    return {"ip": get_client_ip(request), "headers": dict(request.headers)}

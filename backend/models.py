@@ -36,14 +36,28 @@ class Visit(Base):
 
     # Bot signals
     webdriver = Column(Boolean, nullable=True)
-    canvas_hash = Column(String, nullable=True)  # short hash, not full data URL
+    canvas_hash = Column(String, nullable=True)
     plugins_count = Column(Integer, nullable=True)
+
+    # Advanced fingerprint signals
+    audio_hash = Column(String, nullable=True)
+    audio_available = Column(Boolean, nullable=True)
+    webrtc_available = Column(Boolean, nullable=True)
+    font_count = Column(Integer, nullable=True)
+    chrome_obj_missing = Column(Boolean, nullable=True)
+    stealth_detected = Column(Boolean, nullable=True)
+    battery_available = Column(Boolean, nullable=True)
+    # Consistency signals (v4)
+    gpu_consistency = Column(Integer, nullable=True)      # 1=ok 0=mismatch
+    timezone_consistency = Column(Integer, nullable=True) # 1=ok 0=mismatch
 
     # Behavioral
     mouse_entropy = Column(Float, nullable=True)
     typing_delay = Column(Float, nullable=True)
     scroll_events = Column(Integer, nullable=True)
-    time_on_page = Column(Float, nullable=True)   # seconds before submit
+    time_on_page = Column(Float, nullable=True)
+    click_variance = Column(Float, nullable=True)
+    click_count = Column(Integer, nullable=True)
 
     # Scores
     browser_score = Column(Float, nullable=True)
