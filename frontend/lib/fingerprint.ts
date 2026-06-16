@@ -564,3 +564,463 @@ export function staticSignals() {
     plugins_count: nav.plugins?.length ?? 0,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1 — WebRTC Fingerprint (SDP-based)
+// ---------------------------------------------------------------------------
+export async function webrtcFingerprint(): Promise<{
+  sdp_hash: string;
+  ip_policy: string;
+  ice_candidate_count: number;
+  codecs: string;
+}> {
+  try {
+    const RTCPeerConnection =
+      window.RTCPeerConnection ||
+      (window as Window & { webkitRTCPeerConnection?: typeof window.RTCPeerConnection })
+        .webkitRTCPeerConnection;
+    if (!RTCPeerConnection) {
+      return { sdp_hash: "unavailable", ip_policy: "unavailable", ice_candidate_count: 0, codecs: "" };
+    }
+
+    return await new Promise((resolve) => {
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      const iceCandidates: string[] = [];
+      let sdpText = "";
+
+      pc.onicecandidate = (e) => {
+        if (!e.candidate) {
+          const sdp = pc.localDescription?.sdp ?? "";
+          sdpText = sdp;
+          pc.close();
+
+          const codecs = Array.from(sdp.matchAll(/a=rtpmap:\d+ (\w+)/g))
+            .map((m) => m[1])
+            .join(",");
+
+          const ipPolicy = sdp.includes("ice-options:trickle") ? "trickle" :
+            sdp.includes("a=candidate:") ? "full" : "relay-only";
+
+          const sdpHash = sdp.length > 0
+            ? sdp.replace(/\r\n/g, "|").slice(0, 512)
+            : "empty";
+
+          resolve({
+            sdp_hash: sdpHash,
+            ip_policy: ipPolicy,
+            ice_candidate_count: iceCandidates.length,
+            codecs,
+          });
+          return;
+        }
+        const match = /(\d{1,3}(?:\.\d{1,3}){3})/.exec(e.candidate.candidate);
+        if (match) iceCandidates.push(match[1]);
+      };
+
+      const pc2 = pc as RTCPeerConnection & { createDataChannel: (label: string) => void };
+      pc2.createDataChannel("");
+      pc.createOffer()
+        .then((offer) => pc.setLocalDescription(offer))
+        .catch(() => {
+          pc.close();
+          resolve({ sdp_hash: "offer_failed", ip_policy: "unknown", ice_candidate_count: 0, codecs: "" });
+        });
+
+      setTimeout(() => {
+        try { pc.close(); } catch { /* ignore */ }
+        resolve({ sdp_hash: "timeout", ip_policy: "unknown", ice_candidate_count: iceCandidates.length, codecs: "" });
+      }, 3000);
+    });
+  } catch {
+    return { sdp_hash: "error", ip_policy: "unknown", ice_candidate_count: 0, codecs: "" };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 1 — Font Fingerprint Hash (set-based, not just count)
+// ---------------------------------------------------------------------------
+const FONT_PROBE_LIST = [
+  "Arial", "Verdana", "Helvetica", "Times New Roman", "Courier New",
+  "Georgia", "Palatino", "Garamond", "Bookman", "Comic Sans MS",
+  "Trebuchet MS", "Arial Black", "Impact", "Lucida Sans Unicode",
+  "Tahoma", "Century Gothic", "Lucida Console", "Monaco", "Optima",
+  "Segoe UI", "Calibri", "Cambria", "Candara", "Consolas",
+  "Constantia", "Corbel", "Franklin Gothic Medium",
+  "Futura", "Gill Sans", "Helvetica Neue", "Myriad Pro", "Rockwell",
+  "Baskerville", "Bodoni MT", "Book Antiqua", "Centaur", "Copperplate",
+  "Courier", "DejaVu Sans", "DejaVu Serif", "Didot", "DIN Alternate",
+  "Droid Sans", "Droid Serif", "Eurostile", "Frutiger", "Geneva",
+  "Gill Sans MT", "Gloucester MT", "Hoefler Text",
+  "Lato", "Lora", "Menlo", "Merriweather", "Montserrat",
+  "Open Sans", "Oswald", "PT Sans", "Raleway", "Roboto",
+  "Source Code Pro", "Source Sans Pro", "Ubuntu",
+  "Noto Sans", "Noto Serif", "IBM Plex Sans", "IBM Plex Mono",
+  "JetBrains Mono", "Fira Code", "Fira Sans", "Inconsolata",
+  "Crimson Text", "Playfair Display", "Poppins", "Rubik",
+  "Ubuntu Mono", "Hack", "Space Mono", "Work Sans",
+  "Barlow", "Inter", "Manrope", "Outfit", "DM Sans",
+];
+
+export function fontFingerprintHash(): string {
+  try {
+    if ("fonts" in document) {
+      const available = FONT_PROBE_LIST.filter((font) => {
+        try {
+          return (document as Document & {
+            fonts: { check: (font: string) => boolean }
+          }).fonts.check(`12px "${font}"`);
+        } catch {
+          return false;
+        }
+      });
+      const bitfield = available.map((f) => FONT_PROBE_LIST.indexOf(f))
+        .filter((i) => i >= 0);
+      return bitfield.join(",");
+    }
+
+    const canvas = (document as Document & { createElement: (tag: string) => HTMLCanvasElement }).createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return "";
+    const base = "monospace";
+    const testStr = "mmmmmmmmmmlli";
+    const testSize = "72px";
+    const baseWidth = (() => {
+      ctx.font = `${testSize} ${base}`;
+      return ctx.measureText(testStr).width;
+    })();
+    const available: number[] = [];
+    FONT_PROBE_LIST.forEach((font, i) => {
+      ctx.font = `${testSize} '${font}', ${base}`;
+      if (ctx.measureText(testStr).width !== baseWidth) available.push(i);
+    });
+    return available.join(",");
+  } catch {
+    return "";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — Enhanced Playwright Stealth Detection (v2)
+//
+// Beyond v1 detectStealth(), these checks target deeper artifacts:
+//  1. CDP Runtime.evaluate injection via performance.getEntries()
+//  2. Plugin/MimeType prototype chain integrity
+//  3. SpeechSynthesis voices (headless has 0 voices)
+//  4. Navigator property descriptor tampering
+//  5. WebGL parameter anomalies (headless returns minimal params)
+//  6. Performance timing resolution anomaly
+//  7. navigator.connection enumeration (headless often missing)
+// ---------------------------------------------------------------------------
+export function detectStealthV2(): {
+  detected: boolean;
+  checks: Array<{ key: string; label: string; triggered: boolean; detail: string }>;
+} {
+  const checks: Array<{ key: string; label: string; triggered: boolean; detail: string }> = [];
+
+  // Check 1: Performance entries — CDP leaves evaluation scripts in entries
+  let perfAnomaly = false;
+  try {
+    const entries = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
+    const suspicious = entries.filter((e) =>
+      e.name.includes("devtools") ||
+      e.name.includes("chrome-extension") ||
+      e.name.includes("__cdp") ||
+      e.initiatorType === "other" && e.name.startsWith("data:")
+    );
+    perfAnomaly = suspicious.length > 2;
+    checks.push({
+      key: "perf_entries",
+      label: "Performance Entry Anomaly",
+      triggered: perfAnomaly,
+      detail: `${suspicious.length} suspicious entries found`,
+    });
+  } catch {
+    checks.push({ key: "perf_entries", label: "Performance Entry Anomaly", triggered: false, detail: "unsupported" });
+  }
+
+  // Check 2: Plugin prototype chain — headless fakes plugins but breaks the prototype
+  let pluginPrototypeBroken = false;
+  try {
+    const pluginProto = Object.getPrototypeOf(navigator.plugins);
+    const pluginProtoStr = Function.prototype.toString.call(
+      Object.getPrototypeOf(pluginProto).constructor
+    );
+    pluginPrototypeBroken = !pluginProtoStr.includes("[native code]");
+    checks.push({
+      key: "plugin_proto",
+      label: "Plugin Prototype Chain",
+      triggered: pluginPrototypeBroken,
+      detail: pluginPrototypeBroken ? "prototype tampered" : "native",
+    });
+  } catch {
+    checks.push({ key: "plugin_proto", label: "Plugin Prototype Chain", triggered: false, detail: "check failed" });
+  }
+
+  // Check 3: SpeechSynthesis voices — headless Chrome has 0 voices
+  let noVoices = false;
+  try {
+    const synth = window.speechSynthesis;
+    if (synth) {
+      const voiceCount = synth.getVoices().length;
+      noVoices = voiceCount === 0;
+      checks.push({
+        key: "speech_voices",
+        label: "SpeechSynthesis Voices",
+        triggered: noVoices,
+        detail: `${voiceCount} voices`,
+      });
+    } else {
+      checks.push({ key: "speech_voices", label: "SpeechSynthesis Voices", triggered: true, detail: "API missing" });
+      noVoices = true;
+    }
+  } catch {
+    checks.push({ key: "speech_voices", label: "SpeechSynthesis Voices", triggered: false, detail: "check failed" });
+  }
+
+  // Check 4: Navigator property descriptor tampering
+  let descriptorTampered = false;
+  try {
+    const desc = Object.getOwnPropertyDescriptor(Navigator.prototype, "webdriver");
+    if (desc) {
+      const hasGetter = typeof desc.get === "function";
+      const isNative = hasGetter && String(desc.get).includes("[native code]");
+      descriptorTampered = !isNative;
+      checks.push({
+        key: "nav_descriptor",
+        label: "Navigator Descriptor Integrity",
+        triggered: descriptorTampered,
+        detail: descriptorTampered ? "webdriver getter patched" : "native getter",
+      });
+    } else {
+      checks.push({
+        key: "nav_descriptor",
+        label: "Navigator Descriptor Integrity",
+        triggered: true,
+        detail: "webdriver descriptor removed",
+      });
+      descriptorTampered = true;
+    }
+  } catch {
+    checks.push({ key: "nav_descriptor", label: "Navigator Descriptor Integrity", triggered: false, detail: "check failed" });
+  }
+
+  // Check 5: WebGL minimal parameters — headless returns fewer extensions
+  let webglMinimal = false;
+  try {
+    const c = document.createElement("canvas");
+    const gl = c.getContext("webgl") as WebGLRenderingContext | null;
+    if (gl) {
+      const extCount = gl.getSupportedExtensions()?.length ?? 0;
+      webglMinimal = extCount < 5;
+      checks.push({
+        key: "webgl_extensions",
+        label: "WebGL Extension Count",
+        triggered: webglMinimal,
+        detail: `${extCount} extensions (headless typically <5)`,
+      });
+    } else {
+      checks.push({ key: "webgl_extensions", label: "WebGL Extension Count", triggered: true, detail: "WebGL unavailable" });
+      webglMinimal = true;
+    }
+  } catch {
+    checks.push({ key: "webgl_extensions", label: "WebGL Extension Count", triggered: false, detail: "check failed" });
+  }
+
+  // Check 6: Performance timing resolution — CDP bridge has different resolution
+  let timingAnomaly = false;
+  try {
+    const t1 = performance.now();
+    const t2 = performance.now();
+    const resolution = t2 - t1;
+    timingAnomaly = resolution === 0;
+    checks.push({
+      key: "timing_resolution",
+      label: "Performance.now() Resolution",
+      triggered: timingAnomaly,
+      detail: `resolution: ${resolution}ms`,
+    });
+  } catch {
+    checks.push({ key: "timing_resolution", label: "Performance.now() Resolution", triggered: false, detail: "check failed" });
+  }
+
+  // Check 7: navigator.connection missing
+  let connectionMissing = false;
+  try {
+    const conn = (navigator as Navigator & { connection?: unknown }).connection;
+    connectionMissing = conn === undefined;
+    checks.push({
+      key: "net_info",
+      label: "NetworkInformation API",
+      triggered: connectionMissing,
+      detail: connectionMissing ? "missing (headless)" : "present",
+    });
+  } catch {
+    checks.push({ key: "net_info", label: "NetworkInformation API", triggered: false, detail: "check failed" });
+  }
+
+  const detected = checks.some((c) => c.triggered);
+  return { detected, checks };
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2 — Enhanced Selenium Detection (v2)
+//
+// Broader artifact scanning beyond the existing checks:
+//  1. Comprehensive navigator property injection scan
+//  2. CDP variable pattern matching (wildcard scan)
+//  3. Chrome object deep inspection
+//  4. Window event listener leak detection
+//  5. iframe contentWindow property leak
+//  6. Document event dispatcher override
+//  7. User-Agent / Platform / Language consistency
+// ---------------------------------------------------------------------------
+export function detectSeleniumV2(): {
+  detected: boolean;
+  checks: Array<{ key: string; label: string; triggered: boolean; detail: string }>;
+} {
+  const checks: Array<{ key: string; label: string; triggered: boolean; detail: string }> = [];
+  const nav = navigator as Navigator & Record<string, unknown>;
+  const win = window as unknown as Record<string, unknown>;
+
+  // Check 1: Comprehensive navigator injection scan
+  const seleniumNavProps = [
+    "__webdriver_evaluate", "__selenium_evaluate", "__webdriver_script_function",
+    "__webdriver_script_func", "__webdriver_script_fn", "__fxdriver_evaluate",
+    "__driver_unwrapped", "__webdriver_unwrapped", "__driver_evaluate",
+    "__selenium_unwrapped", "__fxdriver_unwrapped",
+    "domAutomation", "domAutomationController", "_Selenium_IDE_Recorder",
+    "__webdriver_script_value", "__webdriver_script_domain",
+  ].filter((p) => p in nav);
+  checks.push({
+    key: "selenium_nav_props",
+    label: "Selenium Navigator Injection",
+    triggered: seleniumNavProps.length > 0,
+    detail: seleniumNavProps.length > 0
+      ? `Found ${seleniumNavProps.length}: ${seleniumNavProps.slice(0, 3).join(", ")}`
+      : "clean",
+  });
+
+  // Check 2: CDP variable wildcard scan
+  const cdcVars = Object.keys(win).filter((k) =>
+    k.startsWith("cdc_") || k.startsWith("$cdc_") || k.startsWith("$chrome_asyncScriptInfo")
+  );
+  checks.push({
+    key: "cdp_wildcard",
+    label: "CDP Variable Scan (wildcard)",
+    triggered: cdcVars.length > 0,
+    detail: cdcVars.length > 0
+      ? `Found ${cdcVars.length}: ${cdcVars.slice(0, 3).join(", ")}`
+      : "clean",
+  });
+
+  // Check 3: Chrome object deep inspection
+  let chromeIncomplete = false;
+  try {
+    const chrome = win.chrome;
+    if (chrome && typeof chrome === "object") {
+      const chromeObj = chrome as Record<string, unknown>;
+      const hasRuntime = "runtime" in chromeObj;
+      const hasApp = "app" in chromeObj;
+      const hasCsi = "csi" in chromeObj;
+      const hasLoadTimes = "loadTimes" in chromeObj;
+      const completeness = [hasRuntime, hasApp, hasCsi, hasLoadTimes].filter(Boolean).length;
+      chromeIncomplete = completeness < 2;
+      checks.push({
+        key: "chrome_deep",
+        label: "Chrome Object Completeness",
+        triggered: chromeIncomplete,
+        detail: `${completeness}/4 sub-objects present`,
+      });
+    } else {
+      checks.push({
+        key: "chrome_deep",
+        label: "Chrome Object Completeness",
+        triggered: true,
+        detail: "window.chrome missing or not object",
+      });
+      chromeIncomplete = true;
+    }
+  } catch {
+    checks.push({ key: "chrome_deep", label: "Chrome Object Completeness", triggered: false, detail: "check failed" });
+  }
+
+  // Check 4: Window event listener leak (Selenium attaches non-standard listeners)
+  let eventLeak = false;
+  try {
+    const getEventListeners = (win as Record<string, unknown>).__getEventListeners;
+    eventLeak = typeof getEventListeners === "function";
+    checks.push({
+      key: "event_listener_leak",
+      label: "Event Listener Leak",
+      triggered: eventLeak,
+      detail: eventLeak ? "__getEventListeners exposed" : "not exposed",
+    });
+  } catch {
+    checks.push({ key: "event_listener_leak", label: "Event Listener Leak", triggered: false, detail: "check failed" });
+  }
+
+  // Check 5: iframe contentWindow deep property scan
+  let iframeLeak = false;
+  try {
+    const iframe = document.createElement("iframe");
+    iframe.style.display = "none";
+    document.body.appendChild(iframe);
+    const iWin = iframe.contentWindow;
+    if (iWin) {
+      const iNav = iWin.navigator as Navigator & Record<string, unknown>;
+      const leakedProps = [
+        "__webdriver_evaluate", "__selenium_evaluate", "domAutomation",
+        "domAutomationController", "__driver_evaluate",
+      ].filter((p) => p in iNav);
+      iframeLeak = leakedProps.length > 0;
+    }
+    document.body.removeChild(iframe);
+    checks.push({
+      key: "iframe_selenium",
+      label: "iframe Selenium Leak",
+      triggered: iframeLeak,
+      detail: iframeLeak ? "selenium props in iframe" : "clean",
+    });
+  } catch {
+    checks.push({ key: "iframe_selenium", label: "iframe Selenium Leak", triggered: false, detail: "check failed" });
+  }
+
+  // Check 6: UA / Platform consistency
+  let uaPlatformMismatch = false;
+  try {
+    const ua = navigator.userAgent.toLowerCase();
+    const platform = navigator.platform.toLowerCase();
+    const isWindowsUA = ua.includes("windows");
+    const isWindowsPlatform = platform.includes("win");
+    const isMacUA = ua.includes("mac");
+    const isMacPlatform = platform.includes("mac");
+    uaPlatformMismatch = (isWindowsUA && !isWindowsPlatform) || (isMacUA && !isMacPlatform);
+    checks.push({
+      key: "ua_platform_consistency",
+      label: "UA / Platform Consistency",
+      triggered: uaPlatformMismatch,
+      detail: uaPlatformMismatch ? "mismatch detected" : "consistent",
+    });
+  } catch {
+    checks.push({ key: "ua_platform_consistency", label: "UA / Platform Consistency", triggered: false, detail: "check failed" });
+  }
+
+  // Check 7: CDP Runtime domain detection via error stack
+  let cdpRuntime = false;
+  try {
+    const err = new Error();
+    const stack = err.stack ?? "";
+    cdpRuntime = stack.includes("Runtime.evaluate") || stack.includes("__cdp__");
+    checks.push({
+      key: "cdp_runtime",
+      label: "CDP Runtime Domain",
+      triggered: cdpRuntime,
+      detail: cdpRuntime ? "CDP evaluate frame in stack" : "clean stack",
+    });
+  } catch {
+    checks.push({ key: "cdp_runtime", label: "CDP Runtime Domain", triggered: false, detail: "check failed" });
+  }
+
+  const detected = checks.some((c) => c.triggered);
+  return { detected, checks };
+}

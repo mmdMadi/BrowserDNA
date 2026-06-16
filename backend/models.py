@@ -51,6 +51,58 @@ class Visit(Base):
     gpu_consistency = Column(Integer, nullable=True)      # 1=ok 0=mismatch
     timezone_consistency = Column(Integer, nullable=True) # 1=ok 0=mismatch
 
+    # Phase 2: Audio Fingerprint
+    audio_stability = Column(Float, nullable=True)
+    audio_worklet = Column(Boolean, nullable=True)
+    audio_hash_2 = Column(String, nullable=True)
+
+    # Phase 2: WebRTC Fingerprint
+    webrtc_ip_leak = Column(Boolean, nullable=True)
+    webrtc_protocol = Column(String, nullable=True)
+    webrtc_candidate_types = Column(String, nullable=True)
+    webrtc_stun_blocked = Column(Boolean, nullable=True)
+
+    # Phase 2: Font Fingerprint
+    font_fingerprint_hash = Column(String, nullable=True)
+    font_list_hash = Column(String, nullable=True)
+    font_canvas_detected = Column(Integer, nullable=True)
+
+    # Phase 2: Playwright Detection
+    playwright_detected = Column(Boolean, nullable=True)
+    playwright_artifacts = Column(String, nullable=True)
+    playwright_version = Column(String, nullable=True)
+
+    # Phase 2: Selenium Detection
+    selenium_detected = Column(Boolean, nullable=True)
+    selenium_artifacts = Column(String, nullable=True)
+    selenium_driver_version = Column(String, nullable=True)
+
+    # Phase 2: Audio Fingerprint
+    audio_stability = Column(Float, nullable=True)
+    audio_worklet = Column(Boolean, nullable=True)
+    audio_hash_2 = Column(String, nullable=True)
+
+    # Phase 2: WebRTC Fingerprint
+    webrtc_ip_leak = Column(Boolean, nullable=True)
+    webrtc_protocol = Column(String, nullable=True)
+    webrtc_candidate_types = Column(String, nullable=True)
+    webrtc_stun_blocked = Column(Boolean, nullable=True)
+
+    # Phase 2: Font Fingerprint
+    font_fingerprint_hash = Column(String, nullable=True)
+    font_list_hash = Column(String, nullable=True)
+    font_canvas_detected = Column(Integer, nullable=True)
+
+    # Phase 2: Playwright Detection
+    playwright_detected = Column(Boolean, nullable=True)
+    playwright_artifacts = Column(String, nullable=True)
+    playwright_version = Column(String, nullable=True)
+
+    # Phase 2: Selenium Detection
+    selenium_detected = Column(Boolean, nullable=True)
+    selenium_artifacts = Column(String, nullable=True)
+    selenium_driver_version = Column(String, nullable=True)
+
     # Behavioral
     mouse_entropy = Column(Float, nullable=True)
     typing_delay = Column(Float, nullable=True)

@@ -15,8 +15,12 @@ import {
   webgl2Fingerprint,
   getClientHints,
   webrtcLocalIP,
+  webrtcFingerprint,
+  fontFingerprintHash,
+  detectStealthV2,
+  detectSeleniumV2,
 } from "@/lib/fingerprint";
-import { audioFingerprint } from "@/lib/audio";
+import { audioFingerprint, audioFingerprintV2 } from "@/lib/audio";
 import ModuleCard from "@/components/ModuleCard";
 import LiveRow from "@/components/LiveRow";
 import Link from "next/link";
@@ -55,6 +59,19 @@ interface FingerprintData {
   client_hints_platform: string;
   connection_type: string;
   pdf_viewer: string;
+  // Phase 1: Enhanced fingerprints
+  audio_v2_hash: string;
+  audio_v2_techniques: { triangle_compressor: number; sine_analyser: number; square_biquad: number };
+  webrtc_sdp_hash: string;
+  webrtc_ip_policy: string;
+  webrtc_ice_count: number;
+  webrtc_codecs: string;
+  font_fingerprint_hash: string;
+  // Phase 2: Enhanced detection
+  playwright_v2_detected: boolean;
+  playwright_v2_checks: Array<{ key: string; label: string; triggered: boolean; detail: string }>;
+  selenium_v2_detected: boolean;
+  selenium_v2_checks: Array<{ key: string; label: string; triggered: boolean; detail: string }>;
 }
 
 function ImpactBadge({ level }: { level: "high" | "medium" | "low" }) {
@@ -81,14 +98,19 @@ export default function FingerprintModule() {
       const canvas = await canvasFingerprint();
       const webgl2 = await webgl2Fingerprint();
       const audio = await audioFingerprint();
+      const audioV2 = await audioFingerprintV2();
       const webrtcAvail = checkWebRTC();
       const webrtcIP = await webrtcLocalIP();
+      const webrtcFp = await webrtcFingerprint();
       const fontCount = countFonts();
+      const fontHash = fontFingerprintHash();
       const chromeObjMissing = checkChromeObj();
       const stealthDetected = detectStealth();
       const batteryAvail = await checkBattery();
       const hints = getClientHints();
       const audioAvail = audio.hash !== "unavailable";
+      const playwrightV2 = detectStealthV2();
+      const seleniumV2 = detectSeleniumV2();
 
       const gpuCons = gpuUAConsistency(statics.user_agent, gpu.gpu_vendor, gpu.gpu_renderer);
       const tzCons = timezoneScreenConsistency(
@@ -140,6 +162,19 @@ export default function FingerprintModule() {
         client_hints_platform: hints.platform,
         connection_type: connectionType,
         pdf_viewer: pdfViewer,
+        // Phase 1: Enhanced fingerprints
+        audio_v2_hash: audioV2.v2_hash,
+        audio_v2_techniques: audioV2.techniques,
+        webrtc_sdp_hash: webrtcFp.sdp_hash.slice(0, 32),
+        webrtc_ip_policy: webrtcFp.ip_policy,
+        webrtc_ice_count: webrtcFp.ice_candidate_count,
+        webrtc_codecs: webrtcFp.codecs,
+        font_fingerprint_hash: fontHash,
+        // Phase 2: Enhanced detection
+        playwright_v2_detected: playwrightV2.detected,
+        playwright_v2_checks: playwrightV2.checks,
+        selenium_v2_detected: seleniumV2.detected,
+        selenium_v2_checks: seleniumV2.checks,
       });
       setLoading(false);
     }
@@ -441,6 +476,67 @@ export default function FingerprintModule() {
           <LiveRow label="CH Platform" value={data.client_hints_platform || "not available"} flag="neutral" />
           <div className="mt-2 text-xs text-slate-500 pl-1">
             navigator.userAgentData (Chrome 90+) provides structured brand/platform info. Bots often lack or mispopulate it.
+          </div>
+        </ModuleCard>
+
+        {/* Phase 1: Audio V2 */}
+        <ModuleCard title="Audio Fingerprint v2" description="3-technique composite audio fingerprint — far more discriminating than v1">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Audio Composite Hash (v2)</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="v2 Hash (SHA-256)"
+            value={<span className="font-mono">{data.audio_v2_hash || "unavailable"}</span>}
+            flag={data.audio_v2_hash === "unavailable" ? "warn" : "neutral"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            Composite of 3 techniques: triangle→compressor, sine→analyser, square→biquad filter.
+          </div>
+
+          {data.audio_v2_techniques && (
+            <>
+              <LiveRow label="Triangle → Compressor" value={data.audio_v2_techniques.triangle_compressor.toFixed(8)} flag="neutral" />
+              <LiveRow label="Sine → Analyser" value={data.audio_v2_techniques.sine_analyser.toFixed(8)} flag="neutral" />
+              <LiveRow label="Square → BiquadFilter" value={data.audio_v2_techniques.square_biquad.toFixed(8)} flag="neutral" />
+            </>
+          )}
+        </ModuleCard>
+
+        {/* Phase 1: WebRTC SDP */}
+        <ModuleCard title="WebRTC SDP Fingerprint" description="SDP-based WebRTC fingerprint — codec list, ICE policy, candidate count">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">SDP Hash</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="SDP Hash"
+            value={<span className="font-mono">{data.webrtc_sdp_hash || "unavailable"}</span>}
+            flag={data.webrtc_sdp_hash === "unavailable" || data.webrtc_sdp_hash === "timeout" ? "warn" : "neutral"}
+          />
+          <LiveRow label="IP Policy" value={data.webrtc_ip_policy || "unknown"} flag="neutral" />
+          <LiveRow label="ICE Candidate Count" value={String(data.webrtc_ice_count ?? 0)} flag="neutral" />
+          <LiveRow label="Codecs" value={data.webrtc_codecs || "none"} flag="neutral" />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            SDP (Session Description Protocol) reveals the browser&apos;s codec stack and ICE configuration.
+            Headless browsers often have different codec sets or no ICE candidates.
+          </div>
+        </ModuleCard>
+
+        {/* Phase 1: Font Fingerprint Hash */}
+        <ModuleCard title="Font Fingerprint Hash" description="Set-based font fingerprint — which fonts are installed, not just how many">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-xs text-slate-500">Font Set Hash</span>
+            <ImpactBadge level="medium" />
+          </div>
+          <LiveRow
+            label="Font Fingerprint Hash"
+            value={<span className="font-mono">{data.font_fingerprint_hash || "empty"}</span>}
+            flag={!data.font_fingerprint_hash ? "warn" : "neutral"}
+          />
+          <div className="my-2 text-xs text-slate-500 pl-1">
+            Instead of counting fonts, this hashes the exact set of available font families.
+            Two machines with the same font count but different font sets will produce different hashes.
           </div>
         </ModuleCard>
 

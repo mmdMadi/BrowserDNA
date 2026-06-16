@@ -126,7 +126,7 @@ function runChecks(): AutomationCheck[] {
   const pwGlobals = [
     "__playwright", "__pw_manual", "__PW_inspect", "_playwrightWorkerIndex",
     "__puppeteer_evaluation_script__",
-  ].filter((k) => (win as Record<string, unknown>)[k] !== undefined);
+  ].filter((k) => (win as unknown as Record<string, unknown>)[k] !== undefined);
   checks.push({
     label: "Playwright / Puppeteer Globals",
     key: "pw_globals",

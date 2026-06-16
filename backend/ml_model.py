@@ -1,32 +1,38 @@
 """
-ML model for bot detection — v4.
+ML model for bot detection — v5.
 
 Architecture: Soft-Voting Ensemble (GradientBoosting + RandomForest).
 
 Training strategy:
-  1. First boot: train on a rich synthetic dataset (3 bot personas).
+  1. First boot: train on a rich synthetic dataset (4 bot personas).
   2. Real-data retraining: when /admin/retrain is called and the feature
      store has ≥ MIN_SAMPLES_PER_CLASS samples per class, the model is
      retrained on a mix of synthetic + real data (synthetic acts as
      regularisation to prevent over-fitting on early real data).
   3. Version tag: bump _MODEL_VERSION to force retrain on next start.
 
-Features used (15 total):
-  0  mouse_entropy          — variance of 2-D velocity; humans ~3-12, bots ~0-1.5
-  1  typing_delay           — avg ms between keystrokes; humans 80-450, bots 0-20
-  2  webdriver              — 1 if navigator.webdriver is true
-  3  plugins_count          — 0 in headless Chrome
-  4  scroll_events          — 0 in most bots
-  5  time_on_page           — seconds; bots submit in < 3 s
-  6  font_count             — system fonts detected; headless = 0-4
-  7  audio_available        — OfflineAudioContext works (1) or blocked (0)
-  8  webrtc_available       — RTCPeerConnection works (1) or absent (0)
-  9  click_variance         — std-dev of inter-click intervals; bots ≈ 0
- 10  hardware_concurrency   — logical CPUs; headless often 0-2
- 11  stealth_detected       — CDP/Playwright globals found (1) or not (0)
- 12  battery_available      — Battery Status API accessible (1) or not (0)
- 13  gpu_consistency        — 0 if GPU vendor/renderer mismatch UA (new)
- 14  timezone_consistency   — 0 if reported timezone is inconsistent (new)
+Features used (21 total):
+   0  mouse_entropy          — variance of 2-D velocity; humans ~3-12, bots ~0-1.5
+   1  typing_delay           — avg ms between keystrokes; humans 80-450, bots 0-20
+   2  webdriver              — 1 if navigator.webdriver is true
+   3  plugins_count          — 0 in headless Chrome
+   4  scroll_events          — 0 in most bots
+   5  time_on_page           — seconds; bots submit in < 3 s
+   6  font_count             — system fonts detected; headless = 0-4
+   7  audio_available        — OfflineAudioContext works (1) or blocked (0)
+   8  webrtc_available       — RTCPeerConnection works (1) or absent (0)
+   9  click_variance         — std-dev of inter-click intervals; bots ≈ 0
+  10  hardware_concurrency   — logical CPUs; headless often 0-2
+  11  stealth_detected       — CDP/Playwright globals found (1) or not (0)
+  12  battery_available      — Battery Status API accessible (1) or not (0)
+  13  gpu_consistency        — 0 if GPU vendor/renderer mismatch UA
+  14  timezone_consistency   — 0 if reported timezone is inconsistent
+  15  playwright_detected    — Playwright framework detected (new v5)
+  16  selenium_detected      — Selenium framework detected (new v5)
+  17  audio_stability        — audio fingerprint stability 0-1 (new v5)
+  18  webrtc_ip_leak         — local IP leaked via WebRTC (new v5)
+  19  webrtc_stun_blocked    — STUN requests blocked (new v5)
+  20  font_fp_empty          — font fingerprint hash empty (new v5)
 """
 
 from __future__ import annotations
@@ -61,12 +67,24 @@ FEATURE_NAMES = [
     "hardware_concurrency",
     "stealth_detected",
     "battery_available",
-    "gpu_consistency",       # new in v4
-    "timezone_consistency",  # new in v4
+    "gpu_consistency",
+    "timezone_consistency",
+    "audio_stability",        # new in v5
+    "audio_worklet",          # new in v5
+    "webrtc_ip_leak",         # new in v5
+    "webrtc_stun_blocked",    # new in v5
+    "font_canvas_detected",   # new in v5
+    "font_list_hash_present", # new in v5
+    "playwright_detected",    # new in v5
+    "playwright_artifacts",   # new in v5
+    "selenium_detected",      # new in v5
+    "selenium_artifacts",     # new in v5
+    "webrtc_protocol_is_tcp",# new in v5
+    "font_canvas_vs_css",    # new in v5
 ]
 
 # Bump to force retrain on next start
-_MODEL_VERSION = "v4"
+_MODEL_VERSION = "v5"
 _VERSION_PATH = MODEL_PATH + ".version"
 
 # Synthetic data mix ratio when real data is available
@@ -79,7 +97,7 @@ _SYNTHETIC_WEIGHT = 0.30   # 30 % synthetic samples blended with real data
 
 def _build_synthetic_dataset(n: int = 400) -> tuple[np.ndarray, np.ndarray]:
     """
-    Generate a balanced synthetic dataset with 15 features.
+    Generate a balanced synthetic dataset with 27 features.
 
     Bot personas:
       A. Naive bot      — obvious signals, no patches
@@ -104,8 +122,20 @@ def _build_synthetic_dataset(n: int = 400) -> tuple[np.ndarray, np.ndarray]:
         rng.integers(4, 16, n).astype(float),    # hardware_concurrency
         np.zeros(n),                              # stealth_detected
         np.ones(n),                               # battery_available
-        np.ones(n),                               # gpu_consistency (consistent)
-        np.ones(n),                               # timezone_consistency (consistent)
+        np.ones(n),                               # gpu_consistency
+        np.ones(n),                               # timezone_consistency
+        rng.uniform(0.85, 1.0, n),               # audio_stability
+        np.ones(n),                               # audio_worklet
+        np.ones(n),                               # webrtc_ip_leak
+        np.zeros(n),                              # webrtc_stun_blocked
+        rng.integers(30, 120, n).astype(float),  # font_canvas_detected
+        np.ones(n),                               # font_list_hash_present
+        np.zeros(n),                              # playwright_detected
+        np.zeros(n),                              # playwright_artifacts
+        np.zeros(n),                              # selenium_detected
+        np.zeros(n),                              # selenium_artifacts
+        np.zeros(n),                              # webrtc_protocol_is_tcp
+        rng.uniform(0, 5, n),                     # font_canvas_vs_css
     ])
 
     # ── Persona A: Naive bot (50 % of bots) ───────────────────────────────
@@ -124,8 +154,20 @@ def _build_synthetic_dataset(n: int = 400) -> tuple[np.ndarray, np.ndarray]:
         rng.choice([0, 1], nA).astype(float),
         np.zeros(nA),
         np.zeros(nA),
-        rng.choice([0, 1], nA, p=[0.7, 0.3]).astype(float),  # often bad gpu consistency
+        rng.choice([0, 1], nA, p=[0.7, 0.3]).astype(float),
         rng.choice([0, 1], nA, p=[0.6, 0.4]).astype(float),
+        rng.uniform(0, 0.5, nA),                 # audio_stability low
+        np.zeros(nA),                             # no audio_worklet
+        np.zeros(nA),                             # no webrtc_ip_leak
+        rng.choice([0, 1], nA, p=[0.5, 0.5]).astype(float),  # webrtc_stun_blocked
+        np.zeros(nA),                             # no fonts via canvas
+        np.zeros(nA),                             # no font_list_hash
+        rng.choice([0, 1], nA, p=[0.4, 0.6]).astype(float),  # playwright_detected
+        rng.integers(0, 5, nA).astype(float),    # playwright_artifacts
+        rng.choice([0, 1], nA, p=[0.4, 0.6]).astype(float),  # selenium_detected
+        rng.integers(0, 8, nA).astype(float),    # selenium_artifacts
+        rng.choice([0, 1], nA, p=[0.7, 0.3]).astype(float),  # webrtc_tcp
+        rng.uniform(15, 50, nA),                 # font_canvas_vs_css large
     ])
 
     # ── Persona B: Stealth bot (25 % of bots) ─────────────────────────────
@@ -142,10 +184,22 @@ def _build_synthetic_dataset(n: int = 400) -> tuple[np.ndarray, np.ndarray]:
         rng.choice([0, 1], nB, p=[0.65, 0.35]).astype(float),
         rng.uniform(0, 10, nB),
         rng.integers(1, 4, nB).astype(float),
-        np.ones(nB),                              # stealth_detected=1 (key signal)
+        np.ones(nB),                              # stealth_detected=1
         np.zeros(nB),
         rng.choice([0, 1], nB, p=[0.5, 0.5]).astype(float),
         rng.choice([0, 1], nB, p=[0.4, 0.6]).astype(float),
+        rng.uniform(0.4, 0.9, nB),               # audio_stability medium
+        rng.choice([0, 1], nB, p=[0.6, 0.4]).astype(float),
+        rng.choice([0, 1], nB, p=[0.5, 0.5]).astype(float),
+        rng.choice([0, 1], nB, p=[0.4, 0.6]).astype(float),
+        rng.integers(0, 30, nB).astype(float),   # few canvas fonts
+        rng.choice([0, 1], nB, p=[0.3, 0.7]).astype(float),
+        rng.choice([0, 1], nB, p=[0.6, 0.4]).astype(float),  # playwright
+        rng.integers(1, 8, nB).astype(float),    # more playwright artifacts
+        rng.choice([0, 1], nB, p=[0.6, 0.4]).astype(float),  # selenium
+        rng.integers(1, 10, nB).astype(float),   # more selenium artifacts
+        rng.choice([0, 1], nB, p=[0.5, 0.5]).astype(float),
+        rng.uniform(10, 40, nB),                 # font mismatch
     ])
 
     # ── Persona C: Headless mobile spoof (15 % of bots) ───────────────────
@@ -166,6 +220,18 @@ def _build_synthetic_dataset(n: int = 400) -> tuple[np.ndarray, np.ndarray]:
         np.zeros(nC),
         rng.choice([0, 1], nC, p=[0.6, 0.4]).astype(float),
         rng.choice([0, 1], nC, p=[0.5, 0.5]).astype(float),
+        rng.uniform(0, 0.6, nC),                 # audio_stability low
+        np.zeros(nC),
+        np.zeros(nC),
+        rng.choice([0, 1], nC, p=[0.4, 0.6]).astype(float),
+        np.zeros(nC),
+        np.zeros(nC),
+        rng.choice([0, 1], nC, p=[0.5, 0.5]).astype(float),
+        rng.integers(0, 3, nC).astype(float),
+        rng.choice([0, 1], nC, p=[0.5, 0.5]).astype(float),
+        rng.integers(0, 4, nC).astype(float),
+        rng.choice([0, 1], nC, p=[0.6, 0.4]).astype(float),
+        rng.uniform(20, 60, nC),
     ])
 
     # ── Persona D: API / curl bot (10 % of bots) ──────────────────────────
@@ -184,8 +250,20 @@ def _build_synthetic_dataset(n: int = 400) -> tuple[np.ndarray, np.ndarray]:
         rng.integers(0, 2, nD).astype(float),
         np.zeros(nD),
         np.zeros(nD),
-        np.zeros(nD),                             # no GPU
-        np.zeros(nD),                             # no timezone match
+        np.zeros(nD),
+        np.zeros(nD),
+        np.zeros(nD),                             # audio_stability=0
+        np.zeros(nD),
+        np.zeros(nD),
+        np.ones(nD),                              # stun blocked
+        np.zeros(nD),
+        np.zeros(nD),
+        rng.choice([0, 1], nD, p=[0.3, 0.7]).astype(float),
+        rng.integers(0, 3, nD).astype(float),
+        rng.choice([0, 1], nD, p=[0.3, 0.7]).astype(float),
+        rng.integers(0, 5, nD).astype(float),
+        np.ones(nD),                              # TCP only
+        rng.uniform(30, 80, nD),                 # large font mismatch
     ])
 
     bot = np.vstack([botA, botB, botC, botD])
@@ -335,6 +413,18 @@ def predict(
     battery_available: bool = False,
     gpu_consistency: int = 1,
     timezone_consistency: int = 1,
+    audio_stability: float = 1.0,
+    audio_worklet: bool = True,
+    webrtc_ip_leak: bool = True,
+    webrtc_stun_blocked: bool = False,
+    font_canvas_detected: int = 0,
+    font_list_hash_present: bool = True,
+    playwright_detected: bool = False,
+    playwright_artifacts: int = 0,
+    selenium_detected: bool = False,
+    selenium_artifacts: int = 0,
+    webrtc_protocol_is_tcp: bool = False,
+    font_canvas_vs_css: float = 0.0,
 ) -> float:
     """Return bot probability in [0, 1]."""
     features = np.array([[
@@ -353,6 +443,18 @@ def predict(
         float(battery_available),
         float(gpu_consistency),
         float(timezone_consistency),
+        float(audio_stability),
+        float(audio_worklet),
+        float(webrtc_ip_leak),
+        float(webrtc_stun_blocked),
+        float(font_canvas_detected),
+        float(font_list_hash_present),
+        float(playwright_detected),
+        float(playwright_artifacts),
+        float(selenium_detected),
+        float(selenium_artifacts),
+        float(webrtc_protocol_is_tcp),
+        float(font_canvas_vs_css),
     ]])
     proba: float = _model.predict_proba(features)[0][1]
     return float(proba)

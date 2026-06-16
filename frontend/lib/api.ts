@@ -33,6 +33,27 @@ export interface AnalyzePayload {
   battery_available?: boolean;
   gpu_consistency?: number;
   timezone_consistency?: number;
+  // Phase 2: Audio
+  audio_stability?: number;
+  audio_worklet?: boolean;
+  audio_hash_2?: string;
+  // Phase 2: WebRTC
+  webrtc_ip_leak?: boolean;
+  webrtc_protocol?: string;
+  webrtc_candidate_types?: string;
+  webrtc_stun_blocked?: boolean;
+  // Phase 2: Font
+  font_fingerprint_hash?: string;
+  font_list_hash?: string;
+  font_canvas_detected?: number;
+  // Phase 2: Playwright
+  playwright_detected?: boolean;
+  playwright_artifacts?: string;
+  playwright_version?: string;
+  // Phase 2: Selenium
+  selenium_detected?: boolean;
+  selenium_artifacts?: string;
+  selenium_driver_version?: string;
   mouse_entropy?: number;
   typing_delay?: number;
   scroll_events?: number;
@@ -89,6 +110,27 @@ export interface Visit {
   battery_available: boolean | null;
   gpu_consistency: number | null;
   timezone_consistency: number | null;
+  // Phase 2: Audio
+  audio_stability: number | null;
+  audio_worklet: boolean | null;
+  audio_hash_2: string | null;
+  // Phase 2: WebRTC
+  webrtc_ip_leak: boolean | null;
+  webrtc_protocol: string | null;
+  webrtc_candidate_types: string | null;
+  webrtc_stun_blocked: boolean | null;
+  // Phase 2: Font
+  font_fingerprint_hash: string | null;
+  font_list_hash: string | null;
+  font_canvas_detected: number | null;
+  // Phase 2: Playwright
+  playwright_detected: boolean | null;
+  playwright_artifacts: string | null;
+  playwright_version: string | null;
+  // Phase 2: Selenium
+  selenium_detected: boolean | null;
+  selenium_artifacts: string | null;
+  selenium_driver_version: string | null;
   mouse_entropy: number | null;
   typing_delay: number | null;
   scroll_events: number | null;

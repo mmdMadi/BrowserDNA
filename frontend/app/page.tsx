@@ -16,8 +16,12 @@ import {
   checkBattery,
   gpuUAConsistency,
   timezoneScreenConsistency,
+  webrtcFingerprint,
+  fontFingerprintHash,
+  detectStealthV2,
+  detectSeleniumV2,
 } from "@/lib/fingerprint";
-import { audioFingerprint } from "@/lib/audio";
+import { audioFingerprint, audioFingerprintV2 } from "@/lib/audio";
 import ScoreBar from "@/components/ScoreBar";
 import VerdictBadge from "@/components/VerdictBadge";
 import Link from "next/link";
@@ -66,11 +70,16 @@ export default function DetectorPage() {
       const statics = staticSignals();
       const canvasHash = await canvasFingerprint();
       const audio = await audioFingerprint();
+      const audioV2 = await audioFingerprintV2();
       const timeOnPage = (Date.now() - startTime.current) / 1000;
       const fontCount = countFonts();
+      const fontHash = fontFingerprintHash();
       const batteryAvail = await checkBattery();
       const webrtcAvail = checkWebRTC();
+      const webrtcFp = await webrtcFingerprint();
       const audioAvail = audio.hash !== "unavailable";
+      const playwrightV2 = detectStealthV2();
+      const seleniumV2 = detectSeleniumV2();
 
       const gpuCons = gpuUAConsistency(statics.user_agent, gpu.gpu_vendor, gpu.gpu_renderer);
       const tzCons = timezoneScreenConsistency(
@@ -95,6 +104,27 @@ export default function DetectorPage() {
         battery_available: batteryAvail,
         gpu_consistency: gpuCons,
         timezone_consistency: tzCons,
+        // Phase 2: Audio
+        audio_stability: audioV2.techniques.triangle_compressor > 0 ? 1.0 : 0.0,
+        audio_worklet: audioV2.hash !== "unavailable",
+        audio_hash_2: audioV2.v2_hash,
+        // Phase 2: WebRTC
+        webrtc_ip_leak: webrtcAvail,
+        webrtc_protocol: webrtcFp.ip_policy,
+        webrtc_candidate_types: webrtcFp.codecs,
+        webrtc_stun_blocked: false,
+        // Phase 2: Font
+        font_fingerprint_hash: fontHash,
+        font_list_hash: fontHash,
+        font_canvas_detected: fontCount,
+        // Phase 2: Playwright
+        playwright_detected: playwrightV2.detected,
+        playwright_artifacts: playwrightV2.checks.filter((c) => c.triggered).map((c) => c.key).join(","),
+        playwright_version: "",
+        // Phase 2: Selenium
+        selenium_detected: seleniumV2.detected,
+        selenium_artifacts: seleniumV2.checks.filter((c) => c.triggered).map((c) => c.key).join(","),
+        selenium_driver_version: "",
         mouse_entropy: mouseRef.current?.entropy() ?? 0,
         typing_delay: typingRef.current?.avgDelay() ?? 0,
         scroll_events: mouseRef.current?.scrollEvents() ?? 0,

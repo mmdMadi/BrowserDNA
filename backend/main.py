@@ -176,6 +176,18 @@ async def analyze(
             battery_available=bool(body.battery_available),
             gpu_consistency=gpu_cons,
             timezone_consistency=tz_cons,
+            audio_stability=float(body.audio_stability or 1.0),
+            audio_worklet=bool(body.audio_worklet) if body.audio_worklet is not None else True,
+            webrtc_ip_leak=bool(body.webrtc_ip_leak) if body.webrtc_ip_leak is not None else True,
+            webrtc_stun_blocked=bool(body.webrtc_stun_blocked),
+            font_canvas_detected=int(body.font_canvas_detected or 0),
+            font_list_hash_present=bool(body.font_list_hash),
+            playwright_detected=bool(body.playwright_detected),
+            playwright_artifacts=len(body.playwright_artifacts.split(",")) if body.playwright_artifacts else 0,
+            selenium_detected=bool(body.selenium_detected),
+            selenium_artifacts=len(body.selenium_artifacts.split(",")) if body.selenium_artifacts else 0,
+            webrtc_protocol_is_tcp=bool(body.webrtc_protocol == "tcp"),
+            font_canvas_vs_css=abs(int(body.font_canvas_detected or 0) - int(body.font_count or 0)),
         )
     except Exception as exc:
         logger.warning("ML prediction failed: %s", exc)
@@ -223,6 +235,23 @@ async def analyze(
         network_score=net_score,
         ml_probability=round(ml * 100, 2),
         bot_probability=prob, verdict=v,
+        # Phase 2 fields
+        audio_stability=body.audio_stability,
+        audio_worklet=body.audio_worklet,
+        audio_hash_2=body.audio_hash_2,
+        webrtc_ip_leak=body.webrtc_ip_leak,
+        webrtc_protocol=body.webrtc_protocol,
+        webrtc_candidate_types=body.webrtc_candidate_types,
+        webrtc_stun_blocked=body.webrtc_stun_blocked,
+        font_fingerprint_hash=body.font_fingerprint_hash,
+        font_list_hash=body.font_list_hash,
+        font_canvas_detected=body.font_canvas_detected,
+        playwright_detected=body.playwright_detected,
+        playwright_artifacts=body.playwright_artifacts,
+        playwright_version=body.playwright_version,
+        selenium_detected=body.selenium_detected,
+        selenium_artifacts=body.selenium_artifacts,
+        selenium_driver_version=body.selenium_driver_version,
     )
     db.add(visit)
     db.commit()

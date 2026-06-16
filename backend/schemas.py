@@ -41,7 +41,7 @@ class AnalyzeRequest(BaseModel):
     canvas_hash: Optional[str] = Field(None, max_length=64)
     plugins_count: Optional[int] = Field(None, ge=0)
 
-    # New: advanced fingerprint signals
+    # Advanced fingerprint signals
     audio_hash: Optional[str] = Field(None, max_length=64)
     audio_available: Optional[bool] = None
     webrtc_available: Optional[bool] = None
@@ -49,9 +49,35 @@ class AnalyzeRequest(BaseModel):
     chrome_obj_missing: Optional[bool] = None
     stealth_detected: Optional[bool] = None
     battery_available: Optional[bool] = None
-    # Consistency signals (v4) — computed client-side and/or server-side
+    # Consistency signals
     gpu_consistency: Optional[int] = Field(None, ge=0, le=1)
     timezone_consistency: Optional[int] = Field(None, ge=0, le=1)
+
+    # Phase 2: Audio Fingerprint
+    audio_stability: Optional[float] = Field(None, ge=0, le=1)
+    audio_worklet: Optional[bool] = None
+    audio_hash_2: Optional[str] = Field(None, max_length=64)
+
+    # Phase 2: WebRTC Fingerprint
+    webrtc_ip_leak: Optional[bool] = None
+    webrtc_protocol: Optional[str] = Field(None, max_length=16)
+    webrtc_candidate_types: Optional[str] = Field(None, max_length=512)
+    webrtc_stun_blocked: Optional[bool] = None
+
+    # Phase 2: Font Fingerprint
+    font_fingerprint_hash: Optional[str] = Field(None, max_length=512)
+    font_list_hash: Optional[str] = Field(None, max_length=512)
+    font_canvas_detected: Optional[int] = Field(None, ge=0)
+
+    # Phase 2: Playwright Detection
+    playwright_detected: Optional[bool] = None
+    playwright_artifacts: Optional[str] = Field(None, max_length=512)
+    playwright_version: Optional[str] = Field(None, max_length=64)
+
+    # Phase 2: Selenium Detection
+    selenium_detected: Optional[bool] = None
+    selenium_artifacts: Optional[str] = Field(None, max_length=512)
+    selenium_driver_version: Optional[str] = Field(None, max_length=64)
 
     # Behavioural
     mouse_entropy: Optional[float] = Field(None, ge=0)
@@ -120,7 +146,7 @@ class VisitOut(BaseModel):
     canvas_hash: Optional[str]
     plugins_count: Optional[int]
 
-    # New fingerprint signals
+    # Advanced fingerprint signals
     audio_hash: Optional[str]
     audio_available: Optional[bool]
     webrtc_available: Optional[bool]
@@ -130,6 +156,32 @@ class VisitOut(BaseModel):
     battery_available: Optional[bool]
     gpu_consistency: Optional[int]
     timezone_consistency: Optional[int]
+
+    # Phase 2: Audio
+    audio_stability: Optional[float]
+    audio_worklet: Optional[bool]
+    audio_hash_2: Optional[str]
+
+    # Phase 2: WebRTC
+    webrtc_ip_leak: Optional[bool]
+    webrtc_protocol: Optional[str]
+    webrtc_candidate_types: Optional[str]
+    webrtc_stun_blocked: Optional[bool]
+
+    # Phase 2: Font
+    font_fingerprint_hash: Optional[str]
+    font_list_hash: Optional[str]
+    font_canvas_detected: Optional[int]
+
+    # Phase 2: Playwright
+    playwright_detected: Optional[bool]
+    playwright_artifacts: Optional[str]
+    playwright_version: Optional[str]
+
+    # Phase 2: Selenium
+    selenium_detected: Optional[bool]
+    selenium_artifacts: Optional[str]
+    selenium_driver_version: Optional[str]
 
     mouse_entropy: Optional[float]
     typing_delay: Optional[float]

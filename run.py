@@ -75,6 +75,28 @@ def _build_is_stale() -> bool:
     return False
 
 
+def _kill_process_tree(proc: subprocess.Popen) -> None:
+    """Kill a process and all its children (works on Windows and Unix)."""
+    if proc.poll() is not None:
+        return
+    try:
+        if sys.platform == "win32":
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        else:
+            import os
+            import signal as sig
+            os.killpg(os.getpgid(proc.pid), sig.SIGTERM)
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Processes
 # ---------------------------------------------------------------------------
@@ -154,12 +176,25 @@ def main() -> None:
     frontend = start_frontend()
 
     processes = [backend, frontend]
+    shutting_down = False
 
-    def shutdown(sig, frame):
+    def shutdown(sig=None, frame=None):
+        nonlocal shutting_down
+        if shutting_down:
+            return
+        shutting_down = True
         print("\n[runner] Shutting down…")
         for p in processes:
             if p.poll() is None:
-                p.terminate()
+                print(f"[runner] Killing PID {p.pid}…")
+                _kill_process_tree(p)
+        # Wait briefly for processes to exit
+        for p in processes:
+            try:
+                p.wait(timeout=5)
+            except Exception:
+                pass
+        print("[runner] All servers stopped.")
         sys.exit(0)
 
     signal.signal(signal.SIGINT,  shutdown)

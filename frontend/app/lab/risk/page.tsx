@@ -7,8 +7,10 @@ import {
   canvasFingerprint, gpuInfo, staticSignals,
   checkWebRTC, countFonts, checkChromeObj, detectStealth, checkBattery,
   gpuUAConsistency, timezoneScreenConsistency,
+  webrtcFingerprint, fontFingerprintHash,
+  detectStealthV2, detectSeleniumV2,
 } from "@/lib/fingerprint";
-import { audioFingerprint } from "@/lib/audio";
+import { audioFingerprint, audioFingerprintV2 } from "@/lib/audio";
 import { analyze, type AnalyzeResult } from "@/lib/api";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -70,11 +72,16 @@ export default function RiskModule() {
       const statics = staticSignals();
       const canvasHash = await canvasFingerprint();
       const audio = await audioFingerprint();
+      const audioV2 = await audioFingerprintV2();
       const timeOnPage = (Date.now() - startTime.current) / 1000;
       const fontCount = countFonts();
+      const fontHash = fontFingerprintHash();
       const batteryAvail = await checkBattery();
       const webrtcAvail = checkWebRTC();
+      const webrtcFp = await webrtcFingerprint();
       const audioAvail = audio.hash !== "unavailable";
+      const playwrightV2 = detectStealthV2();
+      const seleniumV2 = detectSeleniumV2();
       const gpuCons = gpuUAConsistency(statics.user_agent, gpu.gpu_vendor, gpu.gpu_renderer);
       const tzCons  = timezoneScreenConsistency(statics.screen_width, statics.screen_height,
                         statics.plugins_count, audioAvail);
@@ -94,11 +101,29 @@ export default function RiskModule() {
         mouse_entropy: mouseEntropy, typing_delay: typingDelay,
         scroll_events: scrollEvents, time_on_page: timeOnPage,
         click_variance: clickVar, click_count: clickCnt,
+        // Phase 2
+        audio_stability: audioV2.techniques.triangle_compressor > 0 ? 1.0 : 0.0,
+        audio_worklet: audioV2.hash !== "unavailable",
+        audio_hash_2: audioV2.v2_hash,
+        webrtc_ip_leak: webrtcAvail,
+        webrtc_protocol: webrtcFp.ip_policy,
+        webrtc_candidate_types: webrtcFp.codecs,
+        webrtc_stun_blocked: false,
+        font_fingerprint_hash: fontHash,
+        font_list_hash: fontHash,
+        font_canvas_detected: fontCount,
+        playwright_detected: playwrightV2.detected,
+        playwright_artifacts: playwrightV2.checks.filter((c) => c.triggered).map((c) => c.key).join(","),
+        playwright_version: "",
+        selenium_detected: seleniumV2.detected,
+        selenium_artifacts: seleniumV2.checks.filter((c) => c.triggered).map((c) => c.key).join(","),
+        selenium_driver_version: "",
       };
       const data = await analyze(payload);
       setResult(data);
       buildSignals(data, statics, gpu, canvasHash, audioAvail, webrtcAvail, fontCount,
-        gpuCons, tzCons, mouseEntropy, typingDelay, scrollEvents, timeOnPage, batteryAvail);
+        gpuCons, tzCons, mouseEntropy, typingDelay, scrollEvents, timeOnPage, batteryAvail,
+        audioV2, webrtcFp, fontHash, playwrightV2, seleniumV2);
       setPageState("done");
     } catch (e) { setError(e instanceof Error ? e.message : "Unknown error"); setPageState("error"); }
   }
@@ -118,9 +143,16 @@ export default function RiskModule() {
     scrollEvents: number,
     timeOnPage: number,
     batteryAvail: boolean,
+    audioV2?: { v2_hash: string; techniques: { triangle_compressor: number; sine_analyser: number; square_biquad: number } },
+    webrtcFp?: { ip_policy: string; ice_candidate_count: number; codecs: string },
+    fontHash?: string,
+    playwrightV2?: { detected: boolean; checks: Array<{ key: string; triggered: boolean }> },
+    seleniumV2?: { detected: boolean; checks: Array<{ key: string; triggered: boolean }> },
   ) {
     const ua = statics.user_agent.toLowerCase();
     const headless = /headless|selenium|playwright|puppeteer|phantom/.test(ua);
+    const pwTriggered = playwrightV2?.checks.filter(c => c.triggered).length ?? 0;
+    const seTriggered = seleniumV2?.checks.filter(c => c.triggered).length ?? 0;
     const built: Signal[] = [
       // Browser
       { key:"webdriver",   category:"browser", label:"WebDriver Flag",         points: statics.webdriver?65:0,    maxPoints:65,  triggered:statics.webdriver,   value:String(statics.webdriver),         explanation:"navigator.webdriver=true — automation framework detected" },
@@ -134,6 +166,15 @@ export default function RiskModule() {
       { key:"gpu_vendor",  category:"browser", label:"Missing GPU Vendor",      points: !gpu.gpu_vendor?5:0,       maxPoints:5,   triggered:!gpu.gpu_vendor,      value:gpu.gpu_vendor||"empty",           explanation:"No WebGL vendor info" },
       { key:"canvas",      category:"browser", label:"Canvas Fingerprint Fail", points: !canvasHash?5:0,           maxPoints:5,   triggered:!canvasHash,          value:canvasHash||"empty",               explanation:"Canvas API sandboxed" },
       { key:"battery",     category:"browser", label:"Battery API Absent",      points: !batteryAvail?4:0,         maxPoints:4,   triggered:!batteryAvail,        value:batteryAvail?"ok":"absent",        explanation:"Headless Chromium disables Battery API" },
+      // Phase 2: Audio
+      { key:"audio_v2",    category:"browser", label:"Audio v2 Unavailable",    points: audioV2?.v2_hash==="unavailable"?6:0, maxPoints:6, triggered:audioV2?.v2_hash==="unavailable", value:audioV2?.v2_hash?.slice(0,12)||"unavailable", explanation:"3-technique audio fingerprint blocked" },
+      // Phase 2: WebRTC
+      { key:"webrtc_no_ip",category:"browser", label:"WebRTC No Local IP",      points: webrtcAvail&&!webrtcFp?.ice_candidate_count?5:0, maxPoints:5, triggered:webrtcAvail&&(!webrtcFp||webrtcFp.ice_candidate_count===0), value:`${webrtcFp?.ice_candidate_count??0} ICE candidates`, explanation:"No local IP leaked via ICE — sandboxed environment" },
+      { key:"font_hash",   category:"browser", label:"Font Fingerprint Empty",  points: !fontHash?7:0,             maxPoints:7,   triggered:!fontHash,            value:fontHash?.slice(0,16)||"empty",    explanation:"Font set fingerprint empty — minimal container" },
+      // Phase 2: Playwright
+      { key:"playwright_v2",category:"browser", label:"Playwright Deep Detection", points: playwrightV2?.detected?18:0, maxPoints:18, triggered:!!playwrightV2?.detected, value:`${pwTriggered} checks flagged`, explanation:"Performance entries, prototype chain, speech synthesis, WebGL extensions, timing" },
+      // Phase 2: Selenium
+      { key:"selenium_v2", category:"browser", label:"Selenium Deep Detection", points: seleniumV2?.detected?18:0,  maxPoints:18, triggered:!!seleniumV2?.detected,  value:`${seTriggered} checks flagged`,  explanation:"Navigator injection, CDP wildcard, Chrome object, iframe leak" },
       // Behavior
       { key:"mouse",       category:"behavior",label:"Low Mouse Entropy",       points: mouseEntropy<1.5?30:0,     maxPoints:30,  triggered:mouseEntropy<1.5,    value:mouseEntropy.toFixed(3),           explanation:"<1.5 entropy = no natural mouse movement" },
       { key:"typing",      category:"behavior",label:"Fast Typing (<40ms)",     points: typingDelay<40?30:0,       maxPoints:30,  triggered:typingDelay<40,      value:typingDelay>0?`${typingDelay.toFixed(0)}ms`:"no input", explanation:"Automated keystroke injection" },
@@ -142,7 +183,7 @@ export default function RiskModule() {
       // Network
       { key:"network",     category:"network", label:`Network: ${data.network_tier ?? "unknown"}`, points: data.network_score, maxPoints:90, triggered:data.network_score>0, value:data.network_tier??"-", explanation:(data.network_reasons??[]).join(" | ") || "IP network classification" },
       // ML
-      { key:"ml",          category:"ml",      label:"ML Ensemble Score",       points: data.ml_probability,      maxPoints:100, triggered:data.ml_probability>=40, value:`${data.ml_probability.toFixed(1)}/100`, explanation:"GradientBoosting+RandomForest ensemble (15 features)" },
+      { key:"ml",          category:"ml",      label:"ML Ensemble Score",       points: data.ml_probability,      maxPoints:100, triggered:data.ml_probability>=40, value:`${data.ml_probability.toFixed(1)}/100`, explanation:"GradientBoosting+RandomForest ensemble (21 features)" },
     ];
     setSignals(built);
   }

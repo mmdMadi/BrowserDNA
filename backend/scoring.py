@@ -266,6 +266,69 @@ def browser_score_detailed(data: dict) -> tuple[float, list[Rule]]:
          "mismatch" if data.get("gpu_consistency") == 0 else "consistent",
          "GPU renderer contradicts User-Agent (e.g. SwiftShader on desktop UA)")
 
+    # ── Phase 2: Playwright Detection ───────────────────────────────────
+    rule("playwright_detected", "Playwright Framework Detected", 18, 18,
+         data.get("playwright_detected") is True,
+         "detected" if data.get("playwright_detected") else "clean",
+         "Playwright globals or artifacts found — automation framework active")
+
+    pw_artifacts = (data.get("playwright_artifacts") or "")
+    rule("playwright_artifacts", "Playwright Artifacts Present", 10, 10,
+         len(pw_artifacts) > 0,
+         pw_artifacts[:40] if pw_artifacts else "none",
+         "CDP variables or Playwright-specific globals detected in page context")
+
+    # ── Phase 2: Selenium Detection ─────────────────────────────────────
+    rule("selenium_detected", "Selenium Framework Detected", 18, 18,
+         data.get("selenium_detected") is True,
+         "detected" if data.get("selenium_detected") else "clean",
+         "Selenium navigator properties or CDP artifacts found")
+
+    se_artifacts = (data.get("selenium_artifacts") or "")
+    rule("selenium_artifacts", "Selenium Artifacts Present", 10, 10,
+         len(se_artifacts) > 0,
+         se_artifacts[:40] if se_artifacts else "none",
+         "Selenium-injected properties detected (domAutomation, __webdriver_*, etc.)")
+
+    # ── Phase 2: Enhanced Audio Fingerprint ─────────────────────────────
+    audio_stability = data.get("audio_stability")
+    rule("audio_unstable", "Audio Fingerprint Unstable", 6, 6,
+         audio_stability is not None and float(audio_stability) < 0.5,
+         f"{audio_stability:.2f}" if audio_stability is not None else "n/a",
+         "Audio fingerprint varies across renders — virtualized/sandboxed audio context")
+
+    audio_worklet = data.get("audio_worklet")
+    rule("audio_worklet_missing", "AudioWorklet Unavailable", 5, 5,
+         audio_worklet is False,
+         "absent" if audio_worklet is False else "present",
+         "AudioWorklet API blocked — headless environments lack audio processing pipeline")
+
+    # ── Phase 2: Enhanced WebRTC Fingerprint ────────────────────────────
+    webrtc_ip_leak = data.get("webrtc_ip_leak")
+    rule("webrtc_no_ip_leak", "WebRTC No Local IP Leaked", 5, 5,
+         webrtc_ip_leak is False,
+         "no IP leaked" if webrtc_ip_leak is False else "IP leaked",
+         "Real browsers leak local IP via ICE — absence suggests sandboxed/headless environment")
+
+    webrtc_stun = data.get("webrtc_stun_blocked")
+    rule("webrtc_stun_blocked", "WebRTC STUN Blocked", 6, 6,
+         webrtc_stun is True,
+         "blocked" if webrtc_stun else "ok",
+         "STUN requests blocked — sandboxed environment or network restriction")
+
+    # ── Phase 2: Enhanced Font Fingerprint ──────────────────────────────
+    font_fp_hash = (data.get("font_fingerprint_hash") or "")
+    rule("font_fp_empty", "Font Fingerprint Empty", 7, 7,
+         len(font_fp_hash) == 0,
+         "empty" if len(font_fp_hash) == 0 else font_fp_hash[:20],
+         "No fonts detected via font fingerprinting — minimal container environment")
+
+    font_canvas = data.get("font_canvas_detected")
+    rule("font_canvas_few", "Canvas Font Detection Few (<5)", 4, 4,
+         font_canvas is not None and int(font_canvas) < 5,
+         f"{font_canvas} fonts" if font_canvas is not None else "n/a",
+         "Fewer than 5 fonts detected via canvas — near-headless environment")
+
     score = sum(r.points for r in rules)
     return min(score, 100.0), rules
 

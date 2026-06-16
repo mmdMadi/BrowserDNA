@@ -51,6 +51,26 @@ const modules = [
     color: "border-red-500/40 hover:border-red-400",
     tagColor: "bg-red-500/10 text-red-400",
   },
+  {
+    href: "/lab/playwright",
+    emoji: "🎭",
+    number: "06",
+    title: "Playwright Stealth Detection",
+    desc: "Deep detection of Playwright and stealth plugins via performance entries, prototype chains, speech synthesis, and more.",
+    tags: ["Performance", "Prototype", "SpeechSynthesis", "WebGL Extensions", "Timing"],
+    color: "border-pink-500/40 hover:border-pink-400",
+    tagColor: "bg-pink-500/10 text-pink-400",
+  },
+  {
+    href: "/lab/selenium",
+    emoji: "🔧",
+    number: "07",
+    title: "Selenium Detection",
+    desc: "Comprehensive Selenium and ChromeDriver artifact scanning — navigator injection, CDP variables, iframe leaks.",
+    tags: ["Navigator Props", "CDP Variables", "Chrome Object", "iframe Leak", "UA Consistency"],
+    color: "border-cyan-500/40 hover:border-cyan-400",
+    tagColor: "bg-cyan-500/10 text-cyan-400",
+  },
 ];
 
 export default function LabPage() {
@@ -69,7 +89,7 @@ export default function LabPage() {
               teaching — students can observe each signal live in their own browser.
             </p>
             <div className="mt-4 flex flex-wrap gap-2 text-xs">
-              {["5 Modules", "Live Detection", "No Setup Required", "Educational"].map((t) => (
+              {["7 Modules", "Live Detection", "No Setup Required", "Educational"].map((t) => (
                 <span key={t} className="rounded-full border border-slate-600 px-3 py-1 text-slate-400">
                   {t}
                 </span>
@@ -129,6 +149,14 @@ export default function LabPage() {
           <span className="text-slate-600">+</span>
           <span className="rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 text-amber-300">
             🌐 Network → network_score
+          </span>
+          <span className="text-slate-600">+</span>
+              <span className="rounded-lg bg-pink-500/10 border border-pink-500/30 px-3 py-1.5 text-pink-300">
+            🎭 Playwright → browser_score
+          </span>
+          <span className="text-slate-600">+</span>
+          <span className="rounded-lg bg-cyan-500/10 border border-cyan-500/30 px-3 py-1.5 text-cyan-300">
+            🔧 Selenium → browser_score
           </span>
           <span className="text-slate-600">+</span>
           <span className="rounded-lg bg-slate-700/50 border border-slate-600 px-3 py-1.5 text-slate-300">
